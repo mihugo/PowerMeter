@@ -4,22 +4,62 @@
 #include <ArduinoOTA.h>         // For OTA firmware update support
 #include <ESP8266mDNS.h>
 #include <Wire.h>
+//#include <LiquidCrystal_I2C.h>
 #include <SoftwareSerial.h>
-#include <PZEM004T.h>
+//#include <PZEM004T.h>
+#include <PZEM004Tv30.h>
 #include <SimpleTimer.h>
 #include <WebServer.hpp>
 #include <LogClient.hpp>
 #include <TimeProvider.hpp>
 #include <AppData.hpp>
+
+
+#include "SSD1306Ascii.h"
+#include "SSD1306AsciiWire.h"
+#define I2C_ADDRESS 0x3C
+
 #include "secrets.h"
 
 #define  FW_Version "1.0.1"
 
+//#include <string.h>
+//#include <stdlib.h>
+//#include <stdio.h>
+
+SSD1306AsciiWire display;
+TickerState displayState5;
+TickerState displayState2;
+TickerState displayState3;
+//char* displayTickerText5[] = {
+//  "",
+//  ""
+//};
+
+char* displayTickerText5[2];
+
+//char* displayTickerText2[] = {
+//  "",
+//  ""
+//};
+char* displayTickerText2[2];
+//char* displayTickerText3[] = {
+//  "",
+//  ""
+//};
+char* displayTickerText3[2];
+int displayTickerTextI5 = 0;
+int displayTickerTextI2 = 0;
+int displayTickerTextI3 = 0;
+uint32_t displayTickTime = 0;
+#define RTN_CHECK 0
+
 // PZEM004T Configuration.
 // Change the pins if using something other than the Wemos D1 mini and D5/D6 for UART communication.
 #define         PZEM_TIMEOUT  3500
-PZEM004T        pzem( D6, D5);  // RX,TX
-IPAddress       ip( 192,168,1,1 );
+//PZEM004Tv30        pzem( D6, D5);  // RX,TX
+PZEM004Tv30        pzem( D5, D0);  // RX,TX
+#define pzemAddress       0x42
 
 unsigned long   pzemDataOK  = 0;
 unsigned long   pzemDataNOK = 0;
@@ -34,7 +74,13 @@ unsigned long   SLEEP_TIME    = 60 * 1000;        // Sleep time between reads of
 int             MONITOR_LED   = 2;                // Monitoring led to send some visual indication to the user.
 //unsigned long   tick;                             // Used for blinking the MONITOR_LED: ON -> OTA , Blink FAST: Connecting, Blink SLOW: Working
 unsigned long   ledBlink = 200;                   // Led blink interval: Fast - Connecting to PZEM, slow - Connected
-int             monitor_led_state = LOW;  
+int             monitor_led_state = LOW; 
+
+#define LEFT_BUTTON D7
+#define RIGHT_BUTTON D3
+#define PUMP_ON D8
+#define PUMP_DISABLED D6
+
 
 WiFiClient      WIFIClient;
 IPAddress       thisDevice;
@@ -52,6 +98,7 @@ char            SensorTelemetry[512];
 unsigned long   previousMillis = 0;
 unsigned long   pingMqtt = 5 * 60 * 1000;  // Ping the MQTT broker every 5 minutes by sending the IOT Atributes message.
 unsigned long   previousPing = 0;
+
 
 /*
  * Hostname:
@@ -76,12 +123,17 @@ void setHostname() {
 //* Supporting functions:
 void calcAttributesTopic() {
     String s = "iot/device/" + String(MQTT_ClientID) + "/attributes";
+ //   String s = MQTT_TelemetryTopic_Root + String(MQTT_ClientID) + "/attributes";
     s.toCharArray(MQTT_AttributesTopic,256,0);
 }
 
 void calcTelemetryTopic() {
-    String s = "iot/device/" + String(MQTT_ClientID) + "/telemetry";
+    //String s = "iot/device/" + String(MQTT_ClientID) + "/telemetry";
+    String s = MQTT_TelemetryTopic_Root + String(MQTT_ClientID) + "/telemetry";
     s.toCharArray(MQTT_TelemetryTopic,256,0);
+
+    Log.I("MQTT_TelemetryTopic:");
+    Log.I(MQTT_TelemetryTopic);
 }
 
 /*
@@ -104,6 +156,14 @@ void IOT_setAttributes() {
     Log.I("PowerMeter Attributes:");
     Log.I(SensorAttributes);
     MQTT_client.publish( MQTT_AttributesTopic, SensorAttributes);
+
+
+
+    snprintf(displayTickerText5[displayTickerTextI5%2], 100,  "%s %s %s (%i/%i/%i %i:%i:%i) ", \
+      thisDevice.toString().c_str(), WiFi.SSID().c_str(), String(WiFi.RSSI()).c_str(),   //really should do this using c++ strings
+      day(), month(), year(), hour(), minute(), second() );
+   displayTickTime = millis() + 30;  //re-enable scroll
+
 }
 
 void IOT_setTelemetry(String SensorTelemetry) {
@@ -195,11 +255,41 @@ void OTA_Setup() {
     Log.I("OTA setup done!");
 }
 
+
+ICACHE_RAM_ATTR void leftButtonInterrupt() {
+  Serial.println("Left Button Interrupt Detected");
+}
+
+ICACHE_RAM_ATTR void rightButtonInterrupt() {
+  Serial.println("Right Button Interrupt Detected");
+}
+
 void display_WIFIInfo() {
     Log.I("Connected to WIFI: " + WiFi.SSID() );
 
+    //Log.I(  );
+    /*Serial.print("MAC: ");
+    Serial.println(MAC_char);*/
+
     thisDevice = WiFi.localIP();
-    Log.I(" IP: " + thisDevice.toString() );
+    Log.I("  IP: " + thisDevice.toString() );
+
+    display.clear();
+    //display.println("WiFi:");
+    display.println(WiFi.SSID());
+    display.println(thisDevice.toString());
+   
+    display.tickerInit(&displayState2, System5x7, 1, false);
+
+    snprintf(displayTickerText2[displayTickerTextI2%2], 100,  "%s %s", thisDevice.toString().c_str(), String(WiFi.RSSI()).c_str() );
+    display.tickerText(&displayState2, displayTickerText2[displayTickerTextI2%2]);
+
+    int i;
+    for (i=64; i>0; i--)
+    {
+      display.tickerTick(&displayState2);
+     }
+
 }
 
 /*
@@ -223,11 +313,17 @@ void WIFI_Setup() {
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_STA);
 
+   
+
     while ( !connected ) {
         ssid = (char *)APs[cntAP][0];
         pwd = (char *)APs[cntAP][1];
         Log.I("Connecting to: ");
         Log.I(ssid);
+
+        display.clear();
+        display.println("WiFi...");
+        display.println(ssid);
 
         WiFi.begin(ssid, pwd );
 
@@ -271,6 +367,7 @@ void check_Connectivity() {
 
         /* Check WIFI connection first. */        
         if ( WiFi.status() != WL_CONNECTED ) {
+            Log.I("calling WIFI_Setup");
             WIFI_Setup();
             MQTT_Connect();
         } else {
@@ -282,6 +379,14 @@ void check_Connectivity() {
             }
         }
 }
+
+/*
+ * PWRMeter_Connect:
+ * 
+ * Tries to connect to the PowerMeter
+ * 
+ */
+
 
 /*
  * back_tasks:  Executes the background tasks
@@ -296,24 +401,21 @@ void back_tasks() {
     timer.run();                  // Handle SimpleTimer
 }
 
-/*
- * PWRMeter_Connect:
- * 
- * Tries to connect to the PowerMeter
- * 
- */
-
 void PWRMeter_Connect() {
     //uint8_t tries = 0;
     bool    pzemOK = false;
     
     Log.I("Connecting to PZEM004T...");
+    displayTickerTextI5++;
+    sprintf(displayTickerText5[displayTickerTextI5%2], "PZEM004T");
     appData.setPZEMState(PZEM_CONNECTING);
-    pzem.setReadTimeout( PZEM_TIMEOUT);
+   // pzem.setReadTimeout( PZEM_TIMEOUT);
 
     //while ( ((pzemOK=pzem.setAddress(ip)) == false) && ( tries < 10 ) ) {
-    if ( (pzemOK=pzem.setAddress(ip)) == false)  {
+    //if ( (pzemOK=pzem.setAddress(ip)) == false)  {
+    if ( (pzemOK=pzem.setAddress(pzemAddress)) == false)  {
         Log.E("Failed to connect to PZEM004T...");
+       
         appData.setPZEMState(PZEM_CONNECTFAIL);
         //tries++;
         mState = 0;       // Return to the NOT Connected State.
@@ -337,7 +439,7 @@ void PWRMeter_Connect() {
  */
 
 void PWRMeter_getData() {
-    float v = 0;
+    float volts = 0;
     uint8_t tries = 0;
 
     // Set Monitor led on:
@@ -347,44 +449,77 @@ void PWRMeter_getData() {
 
     // Get the PZEM004T Power Meter data
     do {
-      v = pzem.voltage(ip);
+      //v = pzem.voltage(ip);
+      volts = pzem.voltage();
       tries++;
-      
       // Execute the back ground tasks otherwise we may loose conectivity to the MQTT broker.
       back_tasks();
       delay(250);
-      
-    } while ( (v == -1) && ( tries < 10) );
+    } while (( (volts == -1) || isnan(volts) )    && ( tries < 10) );
 
     if ( tries == 10 ) Log.E("Failed to get PowerMeter data after 10 tries!");
-    if ( v == -1 ) Log.E("No valid data obtained from the PowerMeter: V=-1"); 
+    if ( volts == -1 ) Log.E("No valid data obtained from the PowerMeter: V=-1"); 
+    if ( isnan(volts) ) Log.E("No valid data obtained from the PowerMeter: V=nan"); 
     else Log.I("PowerMeter Data OK!");
 
-    float i = pzem.current(ip);
-    float p = pzem.power(ip);
-    float e = pzem.energy(ip);
+
+ 
+    //float i = pzem.current(ip);
+    //float p = pzem.power(ip);
+    //float e = pzem.energy(ip);
+    float amps = pzem.current();
+    float watts = pzem.power();
+    float kwh = pzem.energy();
+    float pf = pzem.pf();
+    float hz = pzem.frequency();
 
     // Turn led off:
     digitalWrite( MONITOR_LED, HIGH); 
 
     // Build the MQTT message:
-    String s = "{\"V\":" + String(v) + \
-               ",\"I\":" + String(i) + \
-               ",\"P\":" + String(p) + \
-               ",\"E\":" + String(e) + "}";
+    String s = "{\"Volts\":" + String(volts) + \
+               ",\"Amps\":" + String(amps) + \
+               ",\"Watts\":" + String(watts) + \
+               ",\"KWh\":" + String(kwh) + \
+               ",\"PF\":" + String(pf) + \
+               ",\"Freq\":" + String(hz) + "}";
 
     Log.I("-> Power Meter data: ");
     Log.I( s );
 
+   /*String d =  String(volts) + " Volts\n"     + \
+               String(amps)  + " Amps\n"  + \
+               String(watts) + " Watts\n" + \
+               String(kwh)   + " KWh\n"   + \
+               String(pf)    + " ~PF\n"     + \
+               String(hz)    + " Hz";
+    */
+
+
+  char d[70];
+  sprintf (d, "%6.2f V\n%6.2f A\n%6.2f W\n%6.2f KWh\n%6.2f ~PF\n%6.2f Hz", volts, amps, watts, kwh, pf, hz );
+ 
+    displayTickTime = ULONG_MAX; //disable scroll
+    display.clear();
+    display.print(d);
+    //display.setFont(Wendy3x5);
+    //display.setFont(newbasic3x5);
+    //display.setFont(Iain5x7); //text OK numbers not alligned still 6 lines but smashed together
+    //display.setFont(Adafruit5x7);  //slightly smaller perhaps better than system
+    //display.setFont(lcd5x7);
+    //display.setFont(Stang5x7);
+
     // Send the data through MQTT to the backend
-    if ( v >= 0 ) {
+    if ( volts >= 0 ) {
         IOT_setTelemetry(s);
 
         // Set AppData for display
-        appData.setVoltage( v );
-        appData.setCurrent( i );
-        appData.setPower( p ); 
-        appData.setEnergy( e );
+        appData.setVoltage( volts );
+        appData.setCurrent( amps );
+        appData.setPower( watts ); 
+        appData.setEnergy( kwh );
+        appData.setPf( pf );
+        appData.setFrequency( hz );
         appData.setSamplesOK();
 
         pzemDataOK++;
@@ -397,30 +532,27 @@ void PWRMeter_getData() {
     mState = 2;   // Move back to the Read data state to trigger another (future) read.
 }
 
-// Moves the state machine to the next state.
 void PWRMeter_ReadState() {
-    mState = 2;
+  mState = 2;
 }
 
 // Just blink the onboard led according to the defined period
 void Blink_MonitorLed() {
-    digitalWrite( MONITOR_LED , monitor_led_state );
-    if ( monitor_led_state == LOW ) 
-        monitor_led_state = HIGH;
-    else 
-        monitor_led_state = LOW;
+  digitalWrite( MONITOR_LED , monitor_led_state );
+  if ( monitor_led_state == LOW ) 
+    monitor_led_state = HIGH;
+  else 
+    monitor_led_state = LOW;
 
-    timer.setTimeout( ledBlink , Blink_MonitorLed ); // With this trick we can change the blink rate of the led
+  timer.setTimeout( ledBlink , Blink_MonitorLed ); // With this trick we can change the blink rate of the led
 }
 
-// Used to send the system atributes to the MQTT topic regarding the device attributes.
 void IOT_SendAttributes() {
-    IOT_setAttributes();
+  IOT_setAttributes();
 }
 
-// Prints time.
 void printTime() {
-    timeProvider.logTime();
+  timeProvider.logTime();
 }
 
 /*
@@ -437,23 +569,64 @@ void setup() {
 
     Serial.begin(115200);
     delay (200);                           // Wait for the serial port to settle.
-    setHostname();
-    Log.setSerial( true );                 // Log to Serial
-    Log.setServer( udpServerAddress, UDPLOG_Port );
-    Log.setTagName("PWM01");                // Define a tag for log lines output
+
+displayTickerText5[0] = (char*)malloc(100*sizeof(char));
+displayTickerText5[1] = (char*)malloc(100*sizeof(char));
+sprintf(displayTickerText5[0], "blank");
+sprintf(displayTickerText5[1], "empty");
+
+displayTickerText2[0] = (char*)malloc(100*sizeof(char));
+displayTickerText2[1] = (char*)malloc(100*sizeof(char));
+sprintf(displayTickerText2[0], "blank");
+sprintf(displayTickerText2[1], "empty");
+
+displayTickerText3[0] = (char*)malloc(100*sizeof(char));
+displayTickerText3[1] = (char*)malloc(100*sizeof(char));
+sprintf(displayTickerText3[0], "blank");
+sprintf(displayTickerText3[1], "empty");
+
+  Wire.begin();
+  Wire.setClock(400000L);
+  display.begin(&MicroOLED64x48, I2C_ADDRESS);
+  display.setFont(lcd5x7);
+   #if INCLUDE_SCROLLING == 0
+  #error INCLUDE_SCROLLING must be non-zero.  Edit SSD1306Ascii.h
+  #endif //  INCLUDE_SCROLLING
+
+  display.setScrollMode(SCROLL_MODE_AUTO);
+  display.clear();
+  display.set1X();
+  display.print(StartUPMsg);
+  display.tickerInit(&displayState5, System5x7, 5, false);
+  delay(500);
+
+  setHostname();
+  Log.setSerial( true );                 // Log to Serial
+  Log.setServer( udpServerAddress, UDPLOG_Port );
+  Log.setTagName("PWM01");                // Define a tag for log lines output
 
     // Indicator onbord LED
     pinMode( MONITOR_LED, OUTPUT);
     digitalWrite( MONITOR_LED, LOW);
 
+    //pinMode( LEFT_BUTTON, INPUT)
+    pinMode(LEFT_BUTTON, INPUT);
+    attachInterrupt(digitalPinToInterrupt(LEFT_BUTTON), leftButtonInterrupt, CHANGE); 
+    pinMode(RIGHT_BUTTON, INPUT);
+    attachInterrupt(digitalPinToInterrupt(RIGHT_BUTTON), rightButtonInterrupt, CHANGE);
+
+    pinMode( PUMP_DISABLED, OUTPUT);
+    pinMode( PUMP_ON, OUTPUT);
+    digitalWrite( PUMP_DISABLED, LOW);
+    digitalWrite( PUMP_ON, LOW);
+
     // We set WIFI first...
+    
     WIFI_Setup();
-
+  
     // Setup Logging system.
-    Log.I("Enabling UDP Log Server...");
-    Log.setUdp( true );                  // Log to UDP server when connected to WIFI.
-
-    // Print a boot mark
+    //Log.I("Enabling UDP Log Server...");
+    //Log.setUdp( true );                  // Log to UDP server when connected to WIFI.
     Log.W("------------------------------------------------> Power Meter REBOOT");
 
     // Setup OTA
@@ -462,6 +635,25 @@ void setup() {
     // Set time provider to know current date and time
     timeProvider.setup();
     timeProvider.logTime();
+    
+    const char * Days [] ={"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+    String datetime = String(Days[weekday()-1]) + ", " + month() +"/"+ day() + "/" + year() + " " + hour() + ":" + minute() + ":" + second();
+    //String datetime = String() + month()+ "/"+ day() + "/" + year() + " " + hour() + ":" + minute() + ":" + second();
+    display.println(datetime); 
+
+    display.tickerInit(&displayState3, System5x7, 2, false);
+
+    snprintf(displayTickerText3[displayTickerTextI3%2], 100,  "%s", datetime.c_str() );   // probalby a much better way  to do this
+    display.tickerText(&displayState3, displayTickerText3[displayTickerTextI3%2]);
+
+    int i;
+    for (i=32; i>0; i--)   //just some silly style look by moving it quickly at first....
+    {
+      display.tickerTick(&displayState3);
+     }
+
+
+
 
     //Connect to the MQTT Broker:
     MQTT_Connect();
@@ -474,8 +666,8 @@ void setup() {
     webServer.setup();
     Log.I("Web server available at port 80.");
 
-    delay(100);
-    display_WIFIInfo();                   // To display wifi info on the UDP socket.
+    //delay(100);
+    //display_WIFIInfo();                   // To display wifi info on the UDP socket.
 
     // Setup the monitor blinking led
     timer.setTimeout( ledBlink , Blink_MonitorLed ); 
@@ -498,7 +690,7 @@ void loop() {
     // Power meter state machine
     switch (mState)
     {
-        case 0:   // We are'nt connected. Trigger a connection every 3s until we connect.
+        case 0:   // We are not connected. Trigger a connection every 3s until we connect.
                 timer.setTimeout( 3000 , PWRMeter_Connect );
                 ledBlink = 200;  // Blink the LED Fast
                 mState = 1;
@@ -518,9 +710,45 @@ void loop() {
         default:
         break;
     }
-    
-    // Execute the background tasks.
-    back_tasks();
 
+    back_tasks();
+    MQTT_client.loop();           // Handle MQTT
     ArduinoOTA.handle();          // Handle OTA.
+    timer.run();                  // Handle SimpleTimer
+
+
+
+    //update display ticker
+    if (displayTickTime <= millis()) 
+    {
+      displayTickTime = millis() + 30;
+
+      // Should check for error. rtn < 0 indicates error.
+      int8_t rtn = display.tickerTick(&displayState5);
+      if (rtn <= RTN_CHECK) 
+      {
+        // Should check for error. Return of false indicates error.
+        //display.tickerText(&displayState, text[(displayN++)%3]);
+        display.tickerText(&displayState5, displayTickerText5[displayTickerTextI5%2]);
+        
+      }
+
+
+      rtn = display.tickerTick(&displayState2);
+      if (rtn <= RTN_CHECK) 
+      {
+        display.tickerText(&displayState2, displayTickerText2[displayTickerTextI2%2]); 
+      }
+
+      rtn = display.tickerTick(&displayState3);
+      if (rtn <= RTN_CHECK) 
+      {
+        display.tickerText(&displayState3, displayTickerText3[displayTickerTextI3%2]); 
+      }
+
+
+    }
+
 }
+
+

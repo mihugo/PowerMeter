@@ -37,6 +37,8 @@ void Web_RootPage( AsyncWebServerRequest *request )
                                       appData.getCurrent().c_str(), \
                                       appData.getPower().c_str(), \
                                       appData.getEnergy().c_str(), \
+                                      appData.getFrequency().c_str(), \
+                                      appData.getPf().c_str(), \
                                       appData.getSamplesOK().c_str(), \
                                       appData.getSamplesNOK().c_str(), \
                                       appData.getPZEMState().c_str() );

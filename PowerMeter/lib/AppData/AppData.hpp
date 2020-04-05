@@ -17,6 +17,8 @@ private:
     float   m_I = 0;
     float   m_P = 0;
     float   m_E = 0;
+    float   m_hz = 0;
+    float   m_pf = 0;
 
     unsigned long m_samplesOK = 0;
     unsigned long m_samplesNOK= 0;
@@ -32,6 +34,8 @@ public:
     void setCurrent( float );
     void setPower( float );
     void setEnergy( float );
+    void setFrequency( float );
+    void setPf( float );
     void setSamplesOK();
     void setSamplesNOK();
 
@@ -50,6 +54,8 @@ public:
     String getCurrent();
     String getPower();
     String getEnergy();
+    String getFrequency();
+    String getPf();
 
     String getSamplesOK();
     String getSamplesNOK();

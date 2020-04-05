@@ -10,6 +10,7 @@ WiFiUDP     Udp;
 IPAddress   ntpServer;							    // IP address of NTP_TIMESERVER from DNS Query
 String      NTP_TIMESERVER;
 int         NTP_TIMEZONES;
+bool        NTP_TIMEZONEDSTEnabled;
 
 TimeProvider timeProvider;
 
@@ -41,6 +42,43 @@ void sendNTPpacket(IPAddress &address)
 }
 
 
+
+int dstOffset (unsigned long unixTime)
+{
+  //borrowed from: https://forum.arduino.cc/index.php?topic=197637.0
+  //this only works in the US but could be made to work WW with a bit of work
+  //because it only updates during NTP sync time will not switch at the correct time.
+  //if syncs are frequntly time will not be wrong for long
+
+  //Receives unix epoch time and returns seconds of offset for local DST
+  //Valid thru 2099 for US only, Calculations from "http://www.webexhibits.org/daylightsaving/i.html"
+  //Code idea from jm_wsb @ "http://forum.arduino.cc/index.php/topic,40286.0.html"
+  //Get epoch times @ "http://www.epochconverter.com/" for testing
+  //DST update wont be reflected until the next time sync
+  //Begin DST: Sunday March 14 - (1 + y*5/4) mod 7
+  //End DST: Sunday November 7 - (1 + y*5/4) mod 7;
+  
+
+  if ( !NTP_TIMEZONEDSTEnabled ) {
+    return (0);    //no DST for our timezone
+  }
+
+  time_t t = unixTime;
+  int beginDSTDay = (14 - (1 + year(t) * 5 / 4) % 7); 
+  int beginDSTMonth=3;
+  int endDSTDay = (7 - (1 + year(t) * 5 / 4) % 7);
+  int endDSTMonth=11;
+  if (((month(t) > beginDSTMonth) && (month(t) < endDSTMonth))
+    || ((month(t) == beginDSTMonth) && (day(t) > beginDSTDay))
+    || ((month(t) == beginDSTMonth) && (day(t) == beginDSTDay) && (hour(t) >= 2))
+    || ((month(t) == endDSTMonth) && (day(t) < endDSTDay))
+    || ((month(t) == endDSTMonth) && (day(t) == endDSTDay) && (hour(t) < 1)))
+    return (3600);  //Add back in one hours worth of seconds - DST in effect
+  else
+    return (0);  //NonDST
+}
+
+
 time_t getNtpTime()
 {
     while (Udp.parsePacket() > 0) ; // discard any previously received packets
@@ -61,7 +99,8 @@ time_t getNtpTime()
             secsSince1900 |= (unsigned long)packetBuffer[41] << 16;
             secsSince1900 |= (unsigned long)packetBuffer[42] << 8;
             secsSince1900 |= (unsigned long)packetBuffer[43];
-            return secsSince1900 - 2208988800UL + NTP_TIMEZONES * SECS_PER_HOUR;
+            unsigned long unixTime = secsSince1900 - 2208988800UL;
+            return unixTime + NTP_TIMEZONES * SECS_PER_HOUR + dstOffset(unixTime);
         }
     }
     Log.E("No NTP Response :-(");
@@ -85,6 +124,7 @@ void TimeProvider::setup() {
 
         NTP_TIMESERVER = NTPServer;
         NTP_TIMEZONES = NTPTZ;
+        NTP_TIMEZONEDSTEnabled = NTPTZDSTEnabled;
         setSyncProvider( getNtpTime );
         setSyncInterval( NTPSync );
         initialized = true;

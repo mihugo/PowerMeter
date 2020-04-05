@@ -78,6 +78,15 @@ const char TEMPLATE_HEADER[] =
   "%s"
   "W"
   "</td></tr>"
+"<tr><td><i class=\"glyphicon glyphicon-scale\"></i></td><td><b>Frequency: </b></td><td>"
+  // getFrequency()
+  "%s"
+  "hz"
+  "</td></tr>"
+  "<tr><td><i class=\"glyphicon glyphicon-scale\"></i></td><td><b>Power Factor: </b></td><td>"
+  // getPf()
+  "%s"
+  "</td></tr>"
   "</tbody></table>"
   "</div>"
   "</div>"

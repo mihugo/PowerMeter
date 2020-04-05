@@ -59,6 +59,26 @@ String AppData::getEnergy() {
     return String(m_E);
 }
 
+void AppData::setPf(float pfin) {
+    m_pf = pfin;
+}
+
+String AppData::getPf() {
+    return String(m_pf);
+}
+
+
+void AppData::setFrequency(float hzin) {
+    m_hz = hzin;
+}
+
+String AppData::getFrequency() {
+    return String(m_hz);
+}
+
+
+
+
 void AppData::setSamplesOK() {
     m_samplesOK++;
 }

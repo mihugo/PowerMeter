@@ -3,6 +3,7 @@
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
 #include <TimeLib.h>
+extern char* displayTickerText;
 
 // Variable used by all modules to output logging.
 LogClient Log;

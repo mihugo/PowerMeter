@@ -23,6 +23,7 @@
 
 #include "secrets.h"
 
+
 #define  FW_Version "1.0.1"
 
 //#include <string.h>
@@ -33,28 +34,17 @@ SSD1306AsciiWire display;
 TickerState displayState5;
 TickerState displayState2;
 TickerState displayState3;
-//char* displayTickerText5[] = {
-//  "",
-//  ""
-//};
 
 char* displayTickerText5[2];
-
-//char* displayTickerText2[] = {
-//  "",
-//  ""
-//};
 char* displayTickerText2[2];
-//char* displayTickerText3[] = {
-//  "",
-//  ""
-//};
 char* displayTickerText3[2];
 int displayTickerTextI5 = 0;
 int displayTickerTextI2 = 0;
 int displayTickerTextI3 = 0;
 uint32_t displayTickTime = 0;
 #define RTN_CHECK 0
+
+unsigned long   LCDRefreshRate = 500; 
 
 // PZEM004T Configuration.
 // Change the pins if using something other than the Wemos D1 mini and D5/D6 for UART communication.
@@ -69,8 +59,8 @@ unsigned long   pzemDataNOK = 0;
 int             mState = 0;                       // Current state for the state machine controlling the connection to the PZEM
                                                   // 0 - Disconnected
                                                   // 1 - Connecting
-                                                  // 2 - Waiting for next read to Start
-                                                  // 3 - Retrieving data
+                                                  // 2 - Reading data loop
+                                                  // 3 - Waiting for next read 
 int mRetries = 0;                                 // number of failures without sucessful read
 
 
@@ -82,11 +72,14 @@ int             MONITOR_LED   = 2;                // Monitoring led to send some
 unsigned long   ledBlink = 200;                   // Led blink interval: Fast - Connecting to PZEM, slow - Connected
 int             monitor_led_state = LOW; 
 
-//#define LEFT_BUTTON D7
-//#define RIGHT_BUTTON D3
 
 #define PUMP_ON D8
 #define PUMP_DISABLED D6
+int pumpState = 0;    //pump state 0 = normal; -1=forced off; 1 = on
+time_t pumpOffTime = 0;  //time pump should be turned off ; 
+time_t RelaySendTelemetryTime = 0;   // Next time pump telemetry data should be sent
+#define RELAYSENDTELEMETRYNORMAL 60 * 58;  //send pump status once an hour if not active  
+#define RELAYSENDTELEMETRYACTIVE 58; //send pump status once a minute if active
 
 const byte
   LEFT_BUTTON(D7),
@@ -94,6 +87,8 @@ const byte
 
 Button leftBtn(LEFT_BUTTON, 25, false, true);
 Button rightBtn(RIGHT_BUTTON, 25, false, true);
+int leftBtnState = 0;
+int rightBtnState = 0;
 
 WiFiClient      WIFIClient;
 IPAddress       thisDevice;
@@ -106,11 +101,365 @@ MQTTClient      MQTT_client(512);
 char            MQTT_AttributesTopic[256];
 char            MQTT_TelemetryTopic[256];
 char            SensorAttributes[512];
-char            SensorTelemetry[512];
+//char            SensorTelemetry[512];
 
-unsigned long   previousMillis = 0;
+//unsigned long   previousMillis = 0;
 unsigned long   pingMqtt = 5 * 60 * 1000;  // Ping the MQTT broker every 5 minutes by sending the IOT Atributes message.
 unsigned long   previousPing = 0;
+
+void sendPumpStatus();
+
+void setupLCD() {
+
+  displayTickerText5[0] = (char*)malloc(100*sizeof(char));
+  displayTickerText5[1] = (char*)malloc(100*sizeof(char));
+  sprintf(displayTickerText5[0], "blank");
+  sprintf(displayTickerText5[1], "empty");
+
+  displayTickerText2[0] = (char*)malloc(100*sizeof(char));
+  displayTickerText2[1] = (char*)malloc(100*sizeof(char));
+  sprintf(displayTickerText2[0], "blank");
+  sprintf(displayTickerText2[1], "empty");
+
+  displayTickerText3[0] = (char*)malloc(100*sizeof(char));
+  displayTickerText3[1] = (char*)malloc(100*sizeof(char));
+  sprintf(displayTickerText3[0], "blank");
+  sprintf(displayTickerText3[1], "empty");
+
+  Wire.begin();
+  Wire.setClock(400000L);
+  display.begin(&MicroOLED64x48, I2C_ADDRESS);
+  display.setFont(lcd5x7);
+   #if INCLUDE_SCROLLING == 0
+  #error INCLUDE_SCROLLING must be non-zero.  Edit SSD1306Ascii.h
+  #endif //  INCLUDE_SCROLLING
+
+  display.setScrollMode(SCROLL_MODE_AUTO);
+  display.clear();
+  display.set1X();
+    
+}
+
+
+void updateLCD(int screen=-1, const char miscText[]="") {
+//Handles output to LCD screen
+//miscText is a bit of a hack for passing in variables that are not globals
+static int prevScreen = -1;
+time_t delta;  // delta time since pump on or off
+//static uint32_t ScreenChangeTime;   //time that screen should automatically be changed back to "default"
+
+
+//if screen was not passed in then redraw the previous screen
+if (screen==-1) screen=prevScreen;
+if (screen==INT_MAX) 
+  {
+    screen=prevScreen+1;
+    if (screen > 3) 
+      screen = 0;
+  }
+if (screen==INT_MIN) 
+  { 
+    screen=prevScreen-1;
+    if (screen < 0 )
+      screen = 3;
+  }
+
+ switch (screen)
+    {
+        case 0:   // Initial screen
+          displayTickTime = ULONG_MAX;  //disable scroll
+          display.setCursor(0,0);
+          display.print(StartUPMsg);
+        break;
+
+        case 1: //Status screen
+
+          
+          if (WiFi.status() ==  WL_CONNECTED) {
+            thisDevice = WiFi.localIP();
+            const char * Days [] ={"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+            
+            //this is barbaric as there must be a simpler way to format these strings with leading zeros ... ToString 
+            char m[3];
+            snprintf(m, 3, "%02i:", minute() );
+            char s[3];
+            snprintf(s, 3, "%02i:", second() );
+            String datetime = String( Days[weekday()-1]) + ", " + month() +"/"+ day() + "/" + year() + " " + hour() + ":" + m + ":" + s;
+
+
+            if (prevScreen != 1 ) 
+            {
+              display.clear();
+              display.println(WiFi.SSID());
+
+              //Wifi info on line 2 
+              //display.println(thisDevice.toString());  
+              display.tickerInit(&displayState2, System5x7, 1, false);
+              displayTickerTextI2++;
+              snprintf(displayTickerText2[displayTickerTextI2%2], 100,  "%s %s", thisDevice.toString().c_str(), String(WiFi.RSSI()).c_str() );
+              display.tickerText(&displayState2, displayTickerText2[displayTickerTextI2%2]);
+              int i;
+              for (i=64; i>0; i--)
+              {
+                display.tickerTick(&displayState2);
+              }
+
+              //Scrolling Time on line 3
+              displayTickerTextI3++;
+              display.tickerInit(&displayState3, System5x7, 2, false);
+              snprintf(displayTickerText3[displayTickerTextI3%2], 100,  "%s", datetime.c_str() );   // probalby a much better way  to do this
+              display.tickerText(&displayState3, displayTickerText3[displayTickerTextI3%2]);
+              //int i;
+              for (i=64; i>0; i--)   //just some silly style look by moving it quickly at first....
+              {
+                display.tickerTick(&displayState3);
+              }
+
+              display.setCursor(0,3);
+              if (MQTT_client.connected() == true) display.println("MQTT: OK   ");
+              else                                 display.println("MQTT: Bad  ");
+
+
+              //PZEM status on line 6 
+              displayTickerTextI5++;
+              display.tickerInit(&displayState5, System5x7, 5, false);
+              sprintf(displayTickerText5[displayTickerTextI5%2], "PZEM004T: %s", appData.getPZEMState().c_str() );
+              for (i=64; i>0; i--)   //just some silly style look by moving it quickly at first....
+              {
+                display.tickerTick(&displayState5);
+              }
+
+              if (displayTickTime == ULONG_MAX) displayTickTime = millis() + 30;  // re-enable scroll
+
+          } else  //update same screen
+            {
+              display.setCursor(0,0);
+              display.println(WiFi.SSID());
+
+              
+              displayTickerTextI2++;
+              snprintf(displayTickerText2[displayTickerTextI2%2], 100,  "%s %s", thisDevice.toString().c_str(), String(WiFi.RSSI()).c_str() );
+
+              displayTickerTextI3++;
+              snprintf(displayTickerText3[displayTickerTextI3%2], 100,  "%s", datetime.c_str() );
+
+              display.setCursor(0,3);
+              if (MQTT_client.connected() == true) display.println("MQTT: OK   ");
+              else                                 display.println("MQTT: Bad  ");
+                     
+              displayTickerTextI5++;
+              sprintf(displayTickerText5[displayTickerTextI5%2], "PZEM004T: %s", appData.getPZEMState().c_str() );
+
+          }
+            
+          } else {  //status with no WIFI connected
+            displayTickTime = ULONG_MAX; //disable scroll
+            display.clear();
+            display.println("WiFi...");
+            display.println(miscText);
+            screen = -1; //force an update next time
+          }
+          break;
+
+        case 2: //Power Display Screen
+
+          displayTickTime = ULONG_MAX; //disable scroll
+          display.setCursor(0,0);
+
+          char o[13];
+          snprintf(o,13,"%6s V   ", appData.getVoltage().c_str()  );
+          display.println( o );
+          snprintf(o,13,"%6s A   ", appData.getCurrent().c_str()  );
+          display.println( o );
+          snprintf(o,13,"%6s W   ", appData.getPower().c_str()  );
+          display.println( o );
+          snprintf(o,13,"%6s KWh ", appData.getEnergy().c_str()  );
+          display.println( o );
+          snprintf(o,13,"%6s ~PF ", appData.getPf().c_str()  );
+          display.println( o );
+          snprintf(o,13,"%6s Hz  ", appData.getFrequency().c_str()  );
+          display.print( o );
+          break;
+
+        case 3:   // Pump Relay status
+          displayTickTime = ULONG_MAX;  //disable scroll
+          display.setCursor(0,0);
+          display.println("Pump:       ");
+          switch (pumpState)
+            {
+              case -1:
+                  display.println("Disabled   ");
+                  display.println("           ");
+                  delta=now() - pumpOffTime;
+                  display.setInvertMode(true);
+                  if (delta >= 0) // should always be less than 0
+                  {
+                    int days = delta / 86400;
+                    if (days > 0) {
+                    //display.println("   " + String(days)+ " days ");
+                      snprintf(o,13,"%4i days ",days);
+                      display.println( o );
+                      snprintf(o,13," %2i:%02i:%02i ", hour(delta), minute(delta), second(delta) );
+                      display.println( o );
+                      display.setInvertMode(false);
+                    } else {
+                      snprintf(o,13," %2i:%02i:%02i ", hour(delta), minute(delta), second(delta) );
+                      display.println( o );
+                      display.setInvertMode(false);
+                      display.println("           ");
+                    }
+                  }
+                  //display.println("           ");
+                  break;
+              case 0:
+                  display.println("Normal     ");
+                  display.println("           ");
+                  display.println("           ");
+                  display.println("           ");
+                  break;
+              case 1: {
+                  display.println("Override   ");
+                  display.println("           ");
+                  delta=pumpOffTime - now();
+                  if (delta >= 0) // should always be greater than 0
+                  {
+                    snprintf(o,13,"%4i:%02i:%02i ", hour(delta), minute(delta), second(delta) );
+                    display.println( o );
+                  }
+                  }
+                  display.println("           ");
+                  break;
+
+              default:
+                  display.println("Unknown   ");
+                  display.println("           ");
+                  display.println("           ");
+                  display.println("           ");
+            }
+            display.print(  "           ");
+            break;
+
+        case -1: //init mode
+
+          displayTickTime = ULONG_MAX; //disable scroll
+          display.clear();
+          display.println("No data");
+          break;
+       
+    }
+    prevScreen = screen;
+}
+
+void updateLCDTask() {
+  updateLCD();
+}
+
+//setup output pins for pump
+void pumpIOsetup()  {
+  pinMode( PUMP_DISABLED, OUTPUT);
+  pinMode( PUMP_ON, OUTPUT);
+}
+
+//sets pump relay to normal mode -- both relays off
+void pumpNormal() {
+  digitalWrite( PUMP_DISABLED, LOW);
+  digitalWrite( PUMP_ON, LOW);
+}
+
+//sets pump relay to override -- pump override on--disable off
+void pumpOverride() {
+  digitalWrite( PUMP_DISABLED, LOW);
+  digitalWrite( PUMP_ON, HIGH);
+}
+
+//sets pump relay to disable mode -- pump override off-- disable on
+void pumpDisable() {
+  digitalWrite( PUMP_DISABLED, HIGH);
+  digitalWrite( PUMP_ON, LOW);
+}
+
+/*
+  check if it time to turn off the pump override
+
+*/
+void pumpCheck() {
+
+  if (pumpState == 1)
+  {  //pump is on already
+    if (now() > pumpOffTime) 
+    {
+      pumpNormal();
+      pumpOffTime = 0;
+      pumpState = 0;
+      sendPumpStatus();
+    }
+  }
+} 
+
+/*
+  force the pump on.  Each call adds 2 hours of time.
+  if disabled cancles disabled time
+
+*/
+void pumpOverrideMode() {
+  switch (pumpState)
+  {
+    case -1:
+        //Serial.println("Pump no longer disabled"); 
+        pumpState = 0;
+        pumpOffTime = 0;
+        pumpNormal();
+        break;
+    case 0:
+        //Serial.println("Pump override for 1 hours"); 
+        pumpState = 1;
+        pumpOffTime = now() + 1 * 3600;
+        pumpOverride();
+        break;
+    case 1:
+        //Serial.println("Pump Adding 1 hours to override time"); 
+        pumpState = 1;
+        pumpOffTime =  pumpOffTime + 1 * 3600;
+        if (pumpOffTime - now() > 3 * 3600 )   // set max pump on time to 3 hours.
+          pumpOffTime = now() + 3 * 3600;
+        pumpOverride();    // not really necesary since already in this mode
+        break;
+  }
+  sendPumpStatus(); 
+
+}
+
+
+
+/*
+  force the pump disable.  
+  if  pump is forced on- put into normal mode
+
+*/
+void pumpDisableMode() {
+  switch (pumpState)
+  {
+    case -1:
+        Log.I("Pump already disabled"); 
+        //pumpState = -1;
+        pumpDisable();
+        break;
+    case 0:
+        Log.I("Pump Disabled"); 
+        pumpState = -1;
+        pumpOffTime = now();
+        pumpDisable();
+        break;
+    case 1:
+        Log.I("Pump Override cancled"); 
+        pumpState = 0;
+        pumpOffTime =  0;
+        pumpNormal();
+        break;
+  }
+  sendPumpStatus();
+
+}
 
 
 /*
@@ -149,6 +498,7 @@ void calcTelemetryTopic() {
     Log.I(MQTT_TelemetryTopic);
 }
 
+
 /*
  * IOT Support:
  * 
@@ -170,13 +520,6 @@ void IOT_setAttributes() {
     Log.I(SensorAttributes);
     MQTT_client.publish( MQTT_AttributesTopic, SensorAttributes);
 
-
-
-    snprintf(displayTickerText5[displayTickerTextI5%2], 100,  "%s %s %s (%i/%i/%i %i:%i:%i) ", \
-      thisDevice.toString().c_str(), WiFi.SSID().c_str(), String(WiFi.RSSI()).c_str(),   //really should do this using c++ strings
-      day(), month(), year(), hour(), minute(), second() );
-   displayTickTime = millis() + 30;  //re-enable scroll
-
 }
 
 void IOT_setTelemetry(String SensorTelemetry) {
@@ -184,14 +527,177 @@ void IOT_setTelemetry(String SensorTelemetry) {
     MQTT_client.publish( MQTT_TelemetryTopic, SensorTelemetry);
 }
 
-// MQTT Calback function for receiving subscribed messages.
-void MQTT_callback(String &topic, String &payload) {
-    /* Just a standard callback. */
-    Log.I("Message arrived in topic: ");
-    Log.I(topic);
+void IOT_setsubscribedTelemetry(String s, String SerialNo) {
+  String topic = String(MQTT_TelemetryTopic_Root) + String(MQTT_ClientID) + "/rpc/response/" + SerialNo;
+  //String topic = "v1/devices/me/rpc/response/" + SerialNo;
+  Log.I(topic + "  " + s);
+  MQTT_client.publish( topic, s);
+}
 
-    Log.I("Message:");
-    Log.I( payload );
+
+//returns a string with pump telemetyr
+String buildPumpTelem() {
+
+String s = "";  
+time_t delta = now();  // sloppy coding -- should really use another variable for now but better than calling now twice
+char o[15];
+int days;
+
+   //time should be possitive for correct output
+   if (pumpOffTime >= delta)
+   {
+     delta = pumpOffTime - delta;
+     days = delta / 86400;
+     if (days > 0) {
+       snprintf(o,15,"%i %2i:%02i:%02i", days, hour(delta), minute(delta), second(delta) );
+     } else {
+       snprintf(o,15,"%2i:%02i:%02i", hour(delta), minute(delta), second(delta) );
+     }
+   } else {
+     delta = delta - pumpOffTime;
+     days = delta / 86400;
+     if (days > 0) {
+       snprintf(o,15,"-%i %2i:%02i:%02i", days, hour(delta), minute(delta), second(delta) );
+     } else {
+       snprintf(o,15,"-%2i:%02i:%02i", hour(delta), minute(delta), second(delta) );
+     }
+   }
+
+   Log.I("delta: " + String(delta));
+
+    switch (pumpState)
+    { 
+      case -1:
+        s = s + "\"pumpState\":\"Disabled\"" + \
+                ",\"PumpStateTime\":\"" + o +"\"" + \
+                ",\"PumpOffTime\":" + String(pumpOffTime); //horrible hack--NTPZ needs to be used here and properly initilazied  to return utc date
+        break;
+      case 0:
+        s = s + "\"pumpState\":\"Normal\"" + \
+                ",\"PumpStateTime\":\"---\"" + \
+               ",\"PumpOffTime\":" + String(pumpOffTime);
+        break;
+      case 1:
+        s = s + "\"pumpState\":\"Override\"" + \
+                ",\"PumpStateTime\":\"" + o + "\"" + \
+                ",\"PumpOffTime\":" + String(pumpOffTime);
+        break;
+    }
+
+  return s;
+}
+
+
+  void sendPumpStatus() {
+
+    // Build the MQTT message:
+    String s = "{" + buildPumpTelem() + "}";
+    RelaySendTelemetryTime = 0; //send pump status for next normal telemtry try
+    Log.I("-> Power Telemetry data: ");
+    Log.I( s );
+
+    IOT_setTelemetry(s);
+
+}
+
+// MQTT Calback function for receiving subscribed messages.
+
+constexpr unsigned int hash(const char *s, int off = 0) {                        
+    return !s[off] ? 5381 : (hash(s, off+1)*33) ^ s[off];                           
+} 
+
+
+#include <ArduinoJson.h>
+void MQTT_callback(String &topic, String &payload) {
+  /* Just a standard callback. */
+  Log.I("Message arrived in topic: " + topic + "  " + payload);
+
+  //try to parse it
+  int last = topic.lastIndexOf('/');
+  String serialNo = "";
+  if (last <= -1) {
+    Log.I("Failed to find serial no");
+    return;    
+  }
+  serialNo = topic.substring(last+1);
+  //Log.I("SerialNo: " + serialNo);
+ 
+  DynamicJsonDocument doc(200);
+  deserializeJson(doc, payload);
+
+  const char* method = doc["method"];
+  int pin = -1;
+  int pinEnabled = 0;
+   
+  switch( hash(method) ){
+    case hash("pumpDisabled") : 
+    Log.I("Pump disabled detected");
+
+
+    case hash("getPumpRelayStatus") :
+      //pin 1 Override
+      //pin 2 Disabled
+      switch (pumpState)
+      {
+      case -1:
+        IOT_setsubscribedTelemetry("{\"1\":false,\"2\":true}",serialNo);
+        break;
+      case 0:
+        IOT_setsubscribedTelemetry("{\"1\":false,\"2\":false}",serialNo);
+        break;
+      case 1:
+        IOT_setsubscribedTelemetry("{\"1\":true,\"2\":false}",serialNo);
+        break;
+      }
+    break;
+
+    case hash("setPumpRelayStatus") :
+
+      if(doc.containsKey("params")) 
+      {
+        pin = doc["params"]["pin"];
+        pinEnabled = (doc["params"]["enabled"]); 
+      } 
+
+      switch (pin) 
+      {
+        case 1 :  Log.I("Pump enable");
+          if (pinEnabled)
+          {
+            
+            IOT_setsubscribedTelemetry("{\"1\":false}",serialNo);
+            pumpOverrideMode();
+          } else {
+            IOT_setsubscribedTelemetry("{\"1\":false}",serialNo);
+            pumpState = 0;
+            pumpOffTime = 0;
+            pumpNormal();
+            sendPumpStatus();
+          }
+          break;
+        case 2 : Log.I("Pump disable");
+          if (pinEnabled)
+          {
+            IOT_setsubscribedTelemetry("{\"2\":false}",serialNo);
+            pumpDisableMode();
+          } else {
+            IOT_setsubscribedTelemetry("{\"2\":false}",serialNo);
+            pumpState = 0;
+            pumpOffTime = 0;
+            pumpNormal();
+            sendPumpStatus();
+          }
+          break;
+        default:
+          Log.I("Unknown pin:" + pin);
+       }
+    break;
+
+    default:
+      Log.I("Unknown request");
+      Log.I(method); 
+  }
+
 }
 
 //* Connects to the MQTT Broker
@@ -208,6 +714,39 @@ void MQTT_Connect() {
 
     calcAttributesTopic();
     calcTelemetryTopic();
+
+    //MQTT_client.subscribe("pump/override");
+
+    static int subscribeOK = 0;
+    
+    if (subscribeOK == 0) {
+
+    String subtopic = String(MQTT_TelemetryTopic_Root) + String(MQTT_ClientID) + "/rpc/request/+";
+   
+    int err;
+    //err =  MQTT_client.subscribe("v1/devices/me/rpc/request/+",1);
+    err =  MQTT_client.subscribe(subtopic,1);
+    if (! err ) {
+      Log.E("failed to subscribe to pump/override.");
+      Serial.print("failed, err=");
+      Serial.print(err);
+      Serial.print(" rc=");
+      Serial.print(MQTT_client.returnCode());
+      Serial.print(" last error=");
+      Serial.println(MQTT_client.lastError());
+      //const char lwmqtt_err_text[][28] = { "SUCCESS", "BUFFER_TOO_SHORT", "VARNUM_OVERFLOW", "NETWORK_FAILED_CONNECT", "NETWORK_TIMEOUT", "NETWORK_FAILED_READ", "NETWORK_FAILED_WRITE", "REMAINING_LENGTH_OVERFLOW", "REMAINING_LENGTH_MISMATCH", "MISSING_OR_WRONG_PACKET", "CONNECTION_DENIED", "FAILED_SUBSCRIPTION", "SUBACK_ARRAY_OVERFLOW", "PONG_TIMEOUT", "UNKNOWN" };
+      //const char lwmqtt_return_code_text[][25] = { "CONNECTION_ACCEPTED", "UNACCEPTABLE_PROTOCOL", "IDENTIFIER_REJECTED", "SERVER_UNAVAILABLE", "BAD_USERNAME_OR_PASSWORD", "NOT_AUTHORIZED", "UNKNOWN_RETURN_CODE", "UNKNOWN" };
+
+//lwmqtt_err_t lastError();
+//lwmqtt_return_code_t returnCode();
+        delay(1000);
+        subscribeOK++;
+    } 
+    } else {   //every other failure try again
+      subscribeOK = 0;
+    }
+
+
 
     Log.I("Connected to MQTT!");
 }
@@ -268,40 +807,21 @@ void OTA_Setup() {
     Log.I("OTA setup done!");
 }
 
-
-//ICACHE_RAM_ATTR void leftButtonInterrupt() {
-//  Serial.println("Left Button Interrupt Detected");
-//}
-
-//ICACHE_RAM_ATTR void rightButtonInterrupt() {
-//  Serial.println("Right Button Interrupt Detected");
-//}
-
 void display_WIFIInfo() {
-    Log.I("Connected to WIFI: " + WiFi.SSID() );
+    if (WiFi.status() ==  WL_CONNECTED) {
+      Log.I("Connected to WIFI: " + WiFi.SSID() );
 
-    //Log.I(  );
-    /*Serial.print("MAC: ");
-    Serial.println(MAC_char);*/
+      //Log.I(  );
+      /*Serial.print("MAC: ");
+      Serial.println(MAC_char);*/
 
-    thisDevice = WiFi.localIP();
-    Log.I("  IP: " + thisDevice.toString() );
+      thisDevice = WiFi.localIP();
+      Log.I("  IP: " + thisDevice.toString() );
 
-    display.clear();
-    //display.println("WiFi:");
-    display.println(WiFi.SSID());
-    display.println(thisDevice.toString());
-   
-    display.tickerInit(&displayState2, System5x7, 1, false);
+    } else {
+      Log.I("Wifi not connected: ");
+    }
 
-    snprintf(displayTickerText2[displayTickerTextI2%2], 100,  "%s %s", thisDevice.toString().c_str(), String(WiFi.RSSI()).c_str() );
-    display.tickerText(&displayState2, displayTickerText2[displayTickerTextI2%2]);
-
-    int i;
-    for (i=64; i>0; i--)
-    {
-      display.tickerTick(&displayState2);
-     }
 
 }
 
@@ -333,10 +853,7 @@ void WIFI_Setup() {
         pwd = (char *)APs[cntAP][1];
         Log.I("Connecting to: ");
         Log.I(ssid);
-
-        display.clear();
-        display.println("WiFi...");
-        display.println(ssid);
+        updateLCD(1,ssid);
 
         WiFi.begin(ssid, pwd );
 
@@ -366,6 +883,7 @@ void WIFI_Setup() {
     }
 */  
     display_WIFIInfo();
+    updateLCD(1);
 }
 
 /*
@@ -412,8 +930,6 @@ void PWRMeter_Connect() {
     bool    pzemOK = false;
     
     Log.I("Connecting to PZEM004T...");
-    displayTickerTextI5++;
-    sprintf(displayTickerText5[displayTickerTextI5%2], "PZEM004T");
     appData.setPZEMState(PZEM_CONNECTING);
 
     if ( (pzemOK=pzem.setAddress(pzemAddress)) == false)  {
@@ -426,10 +942,13 @@ void PWRMeter_Connect() {
         Log.I("Connection to PZEM004T OK!");
         appData.setPZEMState(PZEM_CONNECTED);
         mState = 2;        // Move forward to the Connected State.
+        updateLCD(2);      //change display to show power setting
     } else {
       appData.setPZEMState(PZEM_DISCONNECTED);
       mState = 0;          // Return to the NOT Connected State.
     }
+
+
 }
 
 /*
@@ -441,7 +960,7 @@ void PWRMeter_Connect() {
 
 int PWRMeter_getData() {
     float volts = 0;
-
+ 
     // Set Monitor led on:
     digitalWrite( MONITOR_LED, LOW); 
 
@@ -477,54 +996,43 @@ int PWRMeter_getData() {
     digitalWrite( MONITOR_LED, HIGH); 
 
     // Build the MQTT message:
+    
     String s = "{\"Volts\":" + String(volts) + \
                ",\"Amps\":" + String(amps) + \
                ",\"Watts\":" + String(watts) + \
                ",\"KWh\":" + String(kwh) + \
                ",\"PF\":" + String(pf) + \
-               ",\"Freq\":" + String(hz) + "}";
+               ",\"Freq\":" + String(hz);
 
+     if ( now() - RelaySendTelemetryTime > 0)
+     {
+       s  = s + "," + buildPumpTelem();
+       if (pumpState == 0)
+       {
+         RelaySendTelemetryTime = now() + RELAYSENDTELEMETRYNORMAL;
+       } else {
+         RelaySendTelemetryTime = now() + RELAYSENDTELEMETRYACTIVE;
+       }
+     }       
+     s = s + "}";
+
+Log.I("next data time:" + String(RelaySendTelemetryTime) );
+Log.I(" current time:" + String(now()));
+Log.I("   delta time:" + String(RelaySendTelemetryTime-now()));
     Log.I("-> Power Meter data: ");
     Log.I( s );
 
-   /*String d =  String(volts) + " Volts\n"     + \
-               String(amps)  + " Amps\n"  + \
-               String(watts) + " Watts\n" + \
-               String(kwh)   + " KWh\n"   + \
-               String(pf)    + " ~PF\n"     + \
-               String(hz)    + " Hz";
-    */
-
-
-  char d[70];
-  sprintf (d, "%6.2f V\n%6.2f A\n%6.2f W\n%6.2f KWh\n%6.2f ~PF\n%6.2f Hz", volts, amps, watts, kwh, pf, hz );
- 
-    displayTickTime = ULONG_MAX; //disable scroll
-    display.clear();
-    display.print(d);
-    //display.setFont(Wendy3x5);
-    //display.setFont(newbasic3x5);
-    //display.setFont(Iain5x7); //text OK numbers not alligned still 6 lines but smashed together
-    //display.setFont(Adafruit5x7);  //slightly smaller perhaps better than system
-    //display.setFont(lcd5x7);
-    //display.setFont(Stang5x7);
-
-
-    
+    appData.setVoltage( volts );
+    appData.setCurrent( amps );
+    appData.setPower( watts ); 
+    appData.setEnergy( kwh );
+    appData.setPf( pf );
+    appData.setFrequency( hz );
     
     // Send the data through MQTT to the backend
     if ( volts >= 0 ) {
         IOT_setTelemetry(s);
-
-        // Set AppData for display
-        appData.setVoltage( volts );
-        appData.setCurrent( amps );
-        appData.setPower( watts ); 
-        appData.setEnergy( kwh );
-        appData.setPf( pf );
-        appData.setFrequency( hz );
         appData.setSamplesOK();
-
         pzemDataOK++;
     } else {
         Log.W("Data not sent due to invalid read.");
@@ -560,6 +1068,7 @@ void printTime() {
   timeProvider.logTime();
 }
 
+
 /*
  * MAIN CODE
  * 
@@ -575,35 +1084,11 @@ void setup() {
   Serial.begin(115200);
   delay (200);                           // Wait for the serial port to settle.
 
-  displayTickerText5[0] = (char*)malloc(100*sizeof(char));
-  displayTickerText5[1] = (char*)malloc(100*sizeof(char));
-  sprintf(displayTickerText5[0], "blank");
-  sprintf(displayTickerText5[1], "empty");
 
-  displayTickerText2[0] = (char*)malloc(100*sizeof(char));
-  displayTickerText2[1] = (char*)malloc(100*sizeof(char));
-  sprintf(displayTickerText2[0], "blank");
-  sprintf(displayTickerText2[1], "empty");
-
-  displayTickerText3[0] = (char*)malloc(100*sizeof(char));
-  displayTickerText3[1] = (char*)malloc(100*sizeof(char));
-  sprintf(displayTickerText3[0], "blank");
-  sprintf(displayTickerText3[1], "empty");
-
-  Wire.begin();
-  Wire.setClock(400000L);
-  display.begin(&MicroOLED64x48, I2C_ADDRESS);
-  display.setFont(lcd5x7);
-   #if INCLUDE_SCROLLING == 0
-  #error INCLUDE_SCROLLING must be non-zero.  Edit SSD1306Ascii.h
-  #endif //  INCLUDE_SCROLLING
-
-  display.setScrollMode(SCROLL_MODE_AUTO);
-  display.clear();
-  display.set1X();
-  display.print(StartUPMsg);
-  display.tickerInit(&displayState5, System5x7, 5, false);
-  delay(500);
+  setupLCD();
+  updateLCD(0);  //show startup message
+  timer.setInterval( LCDRefreshRate , updateLCDTask ); 
+  delay(500);    //leave startup on for 1/2 second
 
   setHostname();
   Log.setSerial( true );                 // Log to Serial
@@ -615,20 +1100,13 @@ void setup() {
   digitalWrite( MONITOR_LED, LOW);
 
   // Button setup
-  //pinMode( LEFT_BUTTON, INPUT)
-  //pinMode(LEFT_BUTTON, INPUT);
-  //attachInterrupt(digitalPinToInterrupt(LEFT_BUTTON), leftButtonInterrupt, CHANGE); 
-  //pinMode(RIGHT_BUTTON, INPUT);
-  //attachInterrupt(digitalPinToInterrupt(RIGHT_BUTTON), rightButtonInterrupt, CHANGE);
-  leftBtn.begin();
+   leftBtn.begin();
   rightBtn.begin(); 
   
-
   //relay setup
-  pinMode( PUMP_DISABLED, OUTPUT);
-  pinMode( PUMP_ON, OUTPUT);
-  digitalWrite( PUMP_DISABLED, LOW);
-  digitalWrite( PUMP_ON, LOW);
+  pumpIOsetup();
+  pumpNormal();
+ 
 
   // We set WIFI first...
     
@@ -646,25 +1124,8 @@ void setup() {
   timeProvider.setup();
   timeProvider.logTime();
     
-  const char * Days [] ={"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
-  String datetime = String(Days[weekday()-1]) + ", " + month() +"/"+ day() + "/" + year() + " " + hour() + ":" + minute() + ":" + second();
-  //String datetime = String() + month()+ "/"+ day() + "/" + year() + " " + hour() + ":" + minute() + ":" + second();
-  display.println(datetime); 
-
-  display.tickerInit(&displayState3, System5x7, 2, false);
-
-  snprintf(displayTickerText3[displayTickerTextI3%2], 100,  "%s", datetime.c_str() );   // probalby a much better way  to do this
-  display.tickerText(&displayState3, displayTickerText3[displayTickerTextI3%2]);
-
-  int i;
-  for (i=32; i>0; i--)   //just some silly style look by moving it quickly at first....
-  {
-    display.tickerTick(&displayState3);
-  }
-
-
-
-
+  updateLCD(1);
+ 
   //Connect to the MQTT Broker:
   MQTT_Connect();
 
@@ -691,6 +1152,7 @@ void setup() {
   // Setup MDNS
   MDNS.begin( hostname );
   MDNS.addService("http", "tcp", 80);
+  Log.I("Setup Done");
 }
 
 void loop() {
@@ -731,6 +1193,8 @@ void loop() {
         break;
   
         default:
+           Log.E("Invalid state");
+           mState=0;
         break;
     }
 
@@ -743,24 +1207,59 @@ void loop() {
     rightBtn.read();
 
     if (leftBtn.wasPressed())
-      Serial.println("Left Button pressed");
-    
-    if ( leftBtn.pressedFor(4000) )
     {
-      Serial.println("Left Button pressed for 4 second");
+      //Serial.println("Left Button pressed");
+      updateLCD(INT_MIN);
+    }
+
+    if ( leftBtn.pressedFor(2000) )
+    {
+      if ( leftBtnState == 0)
+      {
+        //Serial.println("Left Button pressed for 2 second");
+        pumpDisableMode();
+        updateLCD(3);
+      }
+      leftBtnState=1;
+    }
+
+    if (leftBtnState==1)  //long pressed detected earlier
+    {
+      if ( leftBtn.wasReleased() )
+      {
+        //Serial.println("Left Button released after being presssed");
+        leftBtnState=0;
+      }
     }
 
 
-    if (rightBtn.wasReleased())
+    if (rightBtn.wasPressed())
     {
-      Serial.println("Right Button pressed");
+      //Serial.println("Right Button pressed");
+      updateLCD(INT_MAX);
     }
 
-    if ( rightBtn.pressedFor(5000) )
+    if ( rightBtn.pressedFor(2000) )
     {
-      Serial.println("right Button pressed for 5 second");
+      if (rightBtnState == 0)
+      {
+        //Serial.println("Right Button pressed for 2 second");
+        pumpOverrideMode();
+        updateLCD(3);
+      }
+      rightBtnState=1;
     }
 
+    if (rightBtnState==1)  //long pressed detected earlier
+    {
+      if ( rightBtn.wasReleased() )
+      {
+        //Serial.println("Right Button released after being presssed");
+        rightBtnState=0;
+      }
+    }
+
+    pumpCheck();   // check if pump needs to be turned off
 
     //update display ticker
     if (displayTickTime <= millis()) 
@@ -773,10 +1272,8 @@ void loop() {
       {
         // Should check for error. Return of false indicates error.
         //display.tickerText(&displayState, text[(displayN++)%3]);
-        display.tickerText(&displayState5, displayTickerText5[displayTickerTextI5%2]);
-        
+        display.tickerText(&displayState5, displayTickerText5[displayTickerTextI5%2]); 
       }
-
 
       rtn = display.tickerTick(&displayState2);
       if (rtn <= RTN_CHECK) 

@@ -19,6 +19,8 @@
 #include "SSD1306AsciiWire.h"
 #define I2C_ADDRESS 0x3C
 
+#include <JC_Button.h>
+
 #include "secrets.h"
 
 #define  FW_Version "1.0.1"
@@ -67,20 +69,31 @@ unsigned long   pzemDataNOK = 0;
 int             mState = 0;                       // Current state for the state machine controlling the connection to the PZEM
                                                   // 0 - Disconnected
                                                   // 1 - Connecting
-                                                  // 2 - Retrieve data
+                                                  // 2 - Waiting for next read to Start
                                                   // 3 - Retrieving data
+int mRetries = 0;                                 // number of failures without sucessful read
 
-unsigned long   SLEEP_TIME    = 60 * 1000;        // Sleep time between reads of PZEM004T values 
+
+const unsigned long   PZEM_SLEEP_TIME    = 60 * 1000;        // Sleep time between reads of PZEM004T values 
+const unsigned long   PZEM_RETRY_TIME    = 250;              // Sleep time after read failure
+
 int             MONITOR_LED   = 2;                // Monitoring led to send some visual indication to the user.
 //unsigned long   tick;                             // Used for blinking the MONITOR_LED: ON -> OTA , Blink FAST: Connecting, Blink SLOW: Working
 unsigned long   ledBlink = 200;                   // Led blink interval: Fast - Connecting to PZEM, slow - Connected
 int             monitor_led_state = LOW; 
 
-#define LEFT_BUTTON D7
-#define RIGHT_BUTTON D3
+//#define LEFT_BUTTON D7
+//#define RIGHT_BUTTON D3
+
 #define PUMP_ON D8
 #define PUMP_DISABLED D6
 
+const byte
+  LEFT_BUTTON(D7),
+  RIGHT_BUTTON(D3);
+
+Button leftBtn(LEFT_BUTTON, 25, false, true);
+Button rightBtn(RIGHT_BUTTON, 25, false, true);
 
 WiFiClient      WIFIClient;
 IPAddress       thisDevice;
@@ -256,13 +269,13 @@ void OTA_Setup() {
 }
 
 
-ICACHE_RAM_ATTR void leftButtonInterrupt() {
-  Serial.println("Left Button Interrupt Detected");
-}
+//ICACHE_RAM_ATTR void leftButtonInterrupt() {
+//  Serial.println("Left Button Interrupt Detected");
+//}
 
-ICACHE_RAM_ATTR void rightButtonInterrupt() {
-  Serial.println("Right Button Interrupt Detected");
-}
+//ICACHE_RAM_ATTR void rightButtonInterrupt() {
+//  Serial.println("Right Button Interrupt Detected");
+//}
 
 void display_WIFIInfo() {
     Log.I("Connected to WIFI: " + WiFi.SSID() );
@@ -380,13 +393,6 @@ void check_Connectivity() {
         }
 }
 
-/*
- * PWRMeter_Connect:
- * 
- * Tries to connect to the PowerMeter
- * 
- */
-
 
 /*
  * back_tasks:  Executes the background tasks
@@ -409,15 +415,10 @@ void PWRMeter_Connect() {
     displayTickerTextI5++;
     sprintf(displayTickerText5[displayTickerTextI5%2], "PZEM004T");
     appData.setPZEMState(PZEM_CONNECTING);
-   // pzem.setReadTimeout( PZEM_TIMEOUT);
 
-    //while ( ((pzemOK=pzem.setAddress(ip)) == false) && ( tries < 10 ) ) {
-    //if ( (pzemOK=pzem.setAddress(ip)) == false)  {
     if ( (pzemOK=pzem.setAddress(pzemAddress)) == false)  {
         Log.E("Failed to connect to PZEM004T...");
-       
         appData.setPZEMState(PZEM_CONNECTFAIL);
-        //tries++;
         mState = 0;       // Return to the NOT Connected State.
     }
 
@@ -438,9 +439,8 @@ void PWRMeter_Connect() {
  * 
  */
 
-void PWRMeter_getData() {
+int PWRMeter_getData() {
     float volts = 0;
-    uint8_t tries = 0;
 
     // Set Monitor led on:
     digitalWrite( MONITOR_LED, LOW); 
@@ -448,21 +448,21 @@ void PWRMeter_getData() {
     Log.I("Getting PowerMeter data...");
 
     // Get the PZEM004T Power Meter data
-    do {
-      //v = pzem.voltage(ip);
-      volts = pzem.voltage();
-      tries++;
-      // Execute the back ground tasks otherwise we may loose conectivity to the MQTT broker.
-      back_tasks();
-      delay(250);
-    } while (( (volts == -1) || isnan(volts) )    && ( tries < 10) );
+    volts = pzem.voltage();
+    if ( isnan(volts) ) {
+      Log.E("No valid data obtained from the PowerMeter: V=nan");
+      //failed  so fall into next state for retry
+      return 1;
+    } else if ( volts == -1 ) {
+      Log.E("No valid data obtained from the PowerMeter: V=-1");
+      //failed  so fall into next state for retry
+      return 1;
+    } else {
+      Log.I("PowerMeter Data OK!");
+    }
 
-    if ( tries == 10 ) Log.E("Failed to get PowerMeter data after 10 tries!");
-    if ( volts == -1 ) Log.E("No valid data obtained from the PowerMeter: V=-1"); 
-    if ( isnan(volts) ) Log.E("No valid data obtained from the PowerMeter: V=nan"); 
-    else Log.I("PowerMeter Data OK!");
-
-
+    // Execute the back ground tasks otherwise we may loose conectivity to the MQTT broker.
+    back_tasks();
  
     //float i = pzem.current(ip);
     //float p = pzem.power(ip);
@@ -509,6 +509,9 @@ void PWRMeter_getData() {
     //display.setFont(lcd5x7);
     //display.setFont(Stang5x7);
 
+
+    
+    
     // Send the data through MQTT to the backend
     if ( volts >= 0 ) {
         IOT_setTelemetry(s);
@@ -530,6 +533,8 @@ void PWRMeter_getData() {
     }
 
     mState = 2;   // Move back to the Read data state to trigger another (future) read.
+
+    return 0;
 }
 
 void PWRMeter_ReadState() {
@@ -561,29 +566,29 @@ void printTime() {
  */
 
 void setup() {
-    IPAddress udpServerAddress;
-    udpServerAddress.fromString(UDPLOG_Server);
+  IPAddress udpServerAddress;
+  udpServerAddress.fromString(UDPLOG_Server);
 
-    appData.setFWVersion(FW_Version);
-    appData.setLogServerIPInfo(udpServerAddress.toString());
+  appData.setFWVersion(FW_Version);
+  appData.setLogServerIPInfo(udpServerAddress.toString());
 
-    Serial.begin(115200);
-    delay (200);                           // Wait for the serial port to settle.
+  Serial.begin(115200);
+  delay (200);                           // Wait for the serial port to settle.
 
-displayTickerText5[0] = (char*)malloc(100*sizeof(char));
-displayTickerText5[1] = (char*)malloc(100*sizeof(char));
-sprintf(displayTickerText5[0], "blank");
-sprintf(displayTickerText5[1], "empty");
+  displayTickerText5[0] = (char*)malloc(100*sizeof(char));
+  displayTickerText5[1] = (char*)malloc(100*sizeof(char));
+  sprintf(displayTickerText5[0], "blank");
+  sprintf(displayTickerText5[1], "empty");
 
-displayTickerText2[0] = (char*)malloc(100*sizeof(char));
-displayTickerText2[1] = (char*)malloc(100*sizeof(char));
-sprintf(displayTickerText2[0], "blank");
-sprintf(displayTickerText2[1], "empty");
+  displayTickerText2[0] = (char*)malloc(100*sizeof(char));
+  displayTickerText2[1] = (char*)malloc(100*sizeof(char));
+  sprintf(displayTickerText2[0], "blank");
+  sprintf(displayTickerText2[1], "empty");
 
-displayTickerText3[0] = (char*)malloc(100*sizeof(char));
-displayTickerText3[1] = (char*)malloc(100*sizeof(char));
-sprintf(displayTickerText3[0], "blank");
-sprintf(displayTickerText3[1], "empty");
+  displayTickerText3[0] = (char*)malloc(100*sizeof(char));
+  displayTickerText3[1] = (char*)malloc(100*sizeof(char));
+  sprintf(displayTickerText3[0], "blank");
+  sprintf(displayTickerText3[1], "empty");
 
   Wire.begin();
   Wire.setClock(400000L);
@@ -605,82 +610,87 @@ sprintf(displayTickerText3[1], "empty");
   Log.setServer( udpServerAddress, UDPLOG_Port );
   Log.setTagName("PWM01");                // Define a tag for log lines output
 
-    // Indicator onbord LED
-    pinMode( MONITOR_LED, OUTPUT);
-    digitalWrite( MONITOR_LED, LOW);
+  // Indicator onbord LED
+  pinMode( MONITOR_LED, OUTPUT);
+  digitalWrite( MONITOR_LED, LOW);
 
-    //pinMode( LEFT_BUTTON, INPUT)
-    pinMode(LEFT_BUTTON, INPUT);
-    attachInterrupt(digitalPinToInterrupt(LEFT_BUTTON), leftButtonInterrupt, CHANGE); 
-    pinMode(RIGHT_BUTTON, INPUT);
-    attachInterrupt(digitalPinToInterrupt(RIGHT_BUTTON), rightButtonInterrupt, CHANGE);
-
-    pinMode( PUMP_DISABLED, OUTPUT);
-    pinMode( PUMP_ON, OUTPUT);
-    digitalWrite( PUMP_DISABLED, LOW);
-    digitalWrite( PUMP_ON, LOW);
-
-    // We set WIFI first...
-    
-    WIFI_Setup();
+  // Button setup
+  //pinMode( LEFT_BUTTON, INPUT)
+  //pinMode(LEFT_BUTTON, INPUT);
+  //attachInterrupt(digitalPinToInterrupt(LEFT_BUTTON), leftButtonInterrupt, CHANGE); 
+  //pinMode(RIGHT_BUTTON, INPUT);
+  //attachInterrupt(digitalPinToInterrupt(RIGHT_BUTTON), rightButtonInterrupt, CHANGE);
+  leftBtn.begin();
+  rightBtn.begin(); 
   
-    // Setup Logging system.
-    //Log.I("Enabling UDP Log Server...");
-    //Log.setUdp( true );                  // Log to UDP server when connected to WIFI.
-    Log.W("------------------------------------------------> Power Meter REBOOT");
 
-    // Setup OTA
-    OTA_Setup();
+  //relay setup
+  pinMode( PUMP_DISABLED, OUTPUT);
+  pinMode( PUMP_ON, OUTPUT);
+  digitalWrite( PUMP_DISABLED, LOW);
+  digitalWrite( PUMP_ON, LOW);
 
-    // Set time provider to know current date and time
-    timeProvider.setup();
-    timeProvider.logTime();
+  // We set WIFI first...
     
-    const char * Days [] ={"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
-    String datetime = String(Days[weekday()-1]) + ", " + month() +"/"+ day() + "/" + year() + " " + hour() + ":" + minute() + ":" + second();
-    //String datetime = String() + month()+ "/"+ day() + "/" + year() + " " + hour() + ":" + minute() + ":" + second();
-    display.println(datetime); 
+  WIFI_Setup();
+  
+  // Setup Logging system.
+  //Log.I("Enabling UDP Log Server...");
+  //Log.setUdp( true );                  // Log to UDP server when connected to WIFI.
+  Log.W("------------------------------------------------> Power Meter REBOOT");
 
-    display.tickerInit(&displayState3, System5x7, 2, false);
+  // Setup OTA
+  OTA_Setup();
 
-    snprintf(displayTickerText3[displayTickerTextI3%2], 100,  "%s", datetime.c_str() );   // probalby a much better way  to do this
-    display.tickerText(&displayState3, displayTickerText3[displayTickerTextI3%2]);
+  // Set time provider to know current date and time
+  timeProvider.setup();
+  timeProvider.logTime();
+    
+  const char * Days [] ={"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+  String datetime = String(Days[weekday()-1]) + ", " + month() +"/"+ day() + "/" + year() + " " + hour() + ":" + minute() + ":" + second();
+  //String datetime = String() + month()+ "/"+ day() + "/" + year() + " " + hour() + ":" + minute() + ":" + second();
+  display.println(datetime); 
 
-    int i;
-    for (i=32; i>0; i--)   //just some silly style look by moving it quickly at first....
-    {
-      display.tickerTick(&displayState3);
-     }
+  display.tickerInit(&displayState3, System5x7, 2, false);
+
+  snprintf(displayTickerText3[displayTickerTextI3%2], 100,  "%s", datetime.c_str() );   // probalby a much better way  to do this
+  display.tickerText(&displayState3, displayTickerText3[displayTickerTextI3%2]);
+
+  int i;
+  for (i=32; i>0; i--)   //just some silly style look by moving it quickly at first....
+  {
+    display.tickerTick(&displayState3);
+  }
 
 
 
 
-    //Connect to the MQTT Broker:
-    MQTT_Connect();
+  //Connect to the MQTT Broker:
+  MQTT_Connect();
 
-    // Send the IOT device attributes at MQTT connection
-    IOT_setAttributes();
+  // Send the IOT device attributes at MQTT connection
+  IOT_setAttributes();
 
-    // Setup WebServer so that we can have a web page while connecting to the PZEM004T
-    Log.I("Setting up the embedded web server...");
-    webServer.setup();
-    Log.I("Web server available at port 80.");
+  // Setup WebServer so that we can have a web page while connecting to the PZEM004T
+  Log.I("Setting up the embedded web server...");
+  webServer.setup();
+  Log.I("Web server available at port 80.");
 
-    //delay(100);
-    //display_WIFIInfo();                   // To display wifi info on the UDP socket.
+  //delay(100);
+  //display_WIFIInfo();                   // To display wifi info on the UDP socket.
 
-    // Setup the monitor blinking led
-    timer.setTimeout( ledBlink , Blink_MonitorLed ); 
+  // Setup the monitor blinking led
+  timer.setTimeout( ledBlink , Blink_MonitorLed ); 
 
-    // Periodically send to the MQTT server the IOT device state
-    timer.setInterval( pingMqtt , IOT_SendAttributes );
+  // Periodically send to the MQTT server the IOT device state
+  timer.setInterval( pingMqtt , IOT_SendAttributes );
 
-    // Periodically log the time
-    timer.setInterval( 3 * 60 * 1000 , printTime );
+  // Periodically log the time
+  timer.setInterval( 3 * 60 * 1000 , printTime );
 
-    // Setup MDNS
-    MDNS.begin( hostname );
-    MDNS.addService("http", "tcp", 80);
+  // Setup MDNS
+  MDNS.begin( hostname );
+  MDNS.addService("http", "tcp", 80);
 }
 
 void loop() {
@@ -699,14 +709,27 @@ void loop() {
                   // So we do nothing here.
         break;
         case 2:   // We are connected. Trigger a Power meter read.
-                PWRMeter_getData();
-                timer.setTimeout(SLEEP_TIME, PWRMeter_ReadState);
-                ledBlink = 500;  // Blink the LED Slow
+                if (PWRMeter_getData() == 0) {          //non-zero return means it failed
+                  timer.setTimeout(PZEM_SLEEP_TIME, PWRMeter_ReadState);
+                  ledBlink = 500;  // Blink the LED Slow
+                  mRetries = 0;  
+                } else {   //failed to read retry in shorter time span
+                  mRetries++;
+
+                  if (mRetries >= 10) {
+                     Log.E("No valid data obtained from the PowerMeter after 10 tries");
+                     timer.setTimeout(PZEM_SLEEP_TIME, PWRMeter_ReadState);
+                     mRetries = 0;
+                  } else {
+                    timer.setTimeout(PZEM_RETRY_TIME, PWRMeter_ReadState); 
+                  }           
+                }
                 mState = 3;
         break;
-        case 3:   // We are waiting for reading the data. The PWRMeter_ReadState will move back to the previous state.
+
+        case 3:   // We are waiting for reading the data. -- Timer wait until next Read-- The PWRMeter_ReadState will move back to the previous state.
         break;
-    
+  
         default:
         break;
     }
@@ -716,6 +739,27 @@ void loop() {
     ArduinoOTA.handle();          // Handle OTA.
     timer.run();                  // Handle SimpleTimer
 
+    leftBtn.read();
+    rightBtn.read();
+
+    if (leftBtn.wasPressed())
+      Serial.println("Left Button pressed");
+    
+    if ( leftBtn.pressedFor(4000) )
+    {
+      Serial.println("Left Button pressed for 4 second");
+    }
+
+
+    if (rightBtn.wasReleased())
+    {
+      Serial.println("Right Button pressed");
+    }
+
+    if ( rightBtn.pressedFor(5000) )
+    {
+      Serial.println("right Button pressed for 5 second");
+    }
 
 
     //update display ticker

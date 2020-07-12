@@ -32,13 +32,16 @@
 
 SSD1306AsciiWire display;
 TickerState displayState5;
+TickerState displayState4;
 TickerState displayState2;
 TickerState displayState3;
 
 char* displayTickerText5[2];
+char* displayTickerText4[2];
 char* displayTickerText2[2];
 char* displayTickerText3[2];
 int displayTickerTextI5 = 0;
+int displayTickerTextI4 = 0;
 int displayTickerTextI2 = 0;
 int displayTickerTextI3 = 0;
 uint32_t displayTickTime = 0;
@@ -49,7 +52,6 @@ unsigned long   LCDRefreshRate = 500;
 // PZEM004T Configuration.
 // Change the pins if using something other than the Wemos D1 mini and D5/D6 for UART communication.
 #define         PZEM_TIMEOUT  3500
-//PZEM004Tv30        pzem( D6, D5);  // RX,TX
 PZEM004Tv30        pzem( D5, D0);  // RX,TX
 #define pzemAddress       0x42
 
@@ -61,7 +63,7 @@ int             mState = 0;                       // Current state for the state
                                                   // 1 - Connecting
                                                   // 2 - Reading data loop
                                                   // 3 - Waiting for next read 
-int mRetries = 0;                                 // number of failures without sucessful read
+int unsigned mRetries = 0;                        // number of failures without sucessful read
 
 
 const unsigned long   PZEM_SLEEP_TIME    = 60 * 1000;        // Sleep time between reads of PZEM004T values 
@@ -104,8 +106,10 @@ char            SensorAttributes[512];
 //char            SensorTelemetry[512];
 
 //unsigned long   previousMillis = 0;
-unsigned long   pingMqtt = 5 * 60 * 1000;  // Ping the MQTT broker every 5 minutes by sending the IOT Atributes message.
+unsigned long   pingMqtt = 60 * 60 * 1000;  // Ping the MQTT broker every hour by sending the IOT Atributes message.
 unsigned long   previousPing = 0;
+
+unsigned int syslogEnabled = 0;
 
 void sendPumpStatus();
 
@@ -115,6 +119,12 @@ void setupLCD() {
   displayTickerText5[1] = (char*)malloc(100*sizeof(char));
   sprintf(displayTickerText5[0], "blank");
   sprintf(displayTickerText5[1], "empty");
+
+
+  displayTickerText4[0] = (char*)malloc(100*sizeof(char));
+  displayTickerText4[1] = (char*)malloc(100*sizeof(char));
+  sprintf(displayTickerText4[0], "blank");
+  sprintf(displayTickerText4[1], "empty");
 
   displayTickerText2[0] = (char*)malloc(100*sizeof(char));
   displayTickerText2[1] = (char*)malloc(100*sizeof(char));
@@ -179,11 +189,11 @@ if (screen==INT_MIN)
             thisDevice = WiFi.localIP();
             const char * Days [] ={"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
             
-            //this is barbaric as there must be a simpler way to format these strings with leading zeros ... ToString 
+            //this is barbaric as there must be a simpler way to format these strings with leading zeros 
             char m[3];
-            snprintf(m, 3, "%02i:", minute() );
+            snprintf(m, 3, "%02i", minute() );
             char s[3];
-            snprintf(s, 3, "%02i:", second() );
+            snprintf(s, 3, "%02i", second() );
             String datetime = String( Days[weekday()-1]) + ", " + month() +"/"+ day() + "/" + year() + " " + hour() + ":" + m + ":" + s;
 
 
@@ -217,17 +227,35 @@ if (screen==INT_MIN)
 
               display.setCursor(0,3);
               if (MQTT_client.connected() == true) display.println("MQTT: OK   ");
-              else                                 display.println("MQTT: Bad  ");
+              else                                 display.println("MQTT: Init ");
 
 
-              //PZEM status on line 6 
+
+
+              //PZEM status on line 5 
+              displayTickerTextI4++;
+              display.tickerInit(&displayState4, System5x7, 4, false);
+              if (mRetries == 0)
+              {
+                sprintf(displayTickerText4[displayTickerTextI4%2], "PZEM004T: %s", appData.getPZEMState().c_str() );
+              } else {
+                sprintf(displayTickerText4[displayTickerTextI4%2], "PZEM004T: %s Errors: %i", appData.getPZEMState().c_str(), mRetries );
+              }
+              for (i=64; i>0; i--)   //just some silly style look by moving it quickly at first....
+              {
+                display.tickerTick(&displayState4);
+              }
+
+
+              //HostName line 6 
               displayTickerTextI5++;
               display.tickerInit(&displayState5, System5x7, 5, false);
-              sprintf(displayTickerText5[displayTickerTextI5%2], "PZEM004T: %s", appData.getPZEMState().c_str() );
+              sprintf(displayTickerText5[displayTickerTextI5%2], "Hostname: %s", hostname );
               for (i=64; i>0; i--)   //just some silly style look by moving it quickly at first....
               {
                 display.tickerTick(&displayState5);
               }
+            
 
               if (displayTickTime == ULONG_MAX) displayTickTime = millis() + 30;  // re-enable scroll
 
@@ -245,10 +273,15 @@ if (screen==INT_MIN)
 
               display.setCursor(0,3);
               if (MQTT_client.connected() == true) display.println("MQTT: OK   ");
-              else                                 display.println("MQTT: Bad  ");
+              else                                 display.println("MQTT: Init ");
                      
-              displayTickerTextI5++;
-              sprintf(displayTickerText5[displayTickerTextI5%2], "PZEM004T: %s", appData.getPZEMState().c_str() );
+              displayTickerTextI4++;
+              if (mRetries == 0)
+              {
+                sprintf(displayTickerText4[displayTickerTextI4%2], "PZEM004T: %s", appData.getPZEMState().c_str() );
+              } else {
+                sprintf(displayTickerText4[displayTickerTextI4%2], "PZEM004T: %s Errors: %i", appData.getPZEMState().c_str(), mRetries );
+              }
 
           }
             
@@ -451,7 +484,7 @@ void pumpDisableMode() {
         pumpDisable();
         break;
     case 1:
-        Log.I("Pump Override cancled"); 
+        Log.I("Pump Override canceled"); 
         pumpState = 0;
         pumpOffTime =  0;
         pumpNormal();
@@ -471,7 +504,8 @@ void pumpDisableMode() {
 void setHostname() {
  
   // Set Hostname for OTA and network mDNS (add only 2 last bytes of last MAC Address)
-  sprintf_P( hostname, PSTR("ESP-PWRMETER-%04X"), ESP.getChipId() & 0xFFFF);
+  //sprintf_P( hostname, PSTR("ESP-PWRMETER-%04X"), ESP.getChipId() & 0xFFFF);
+  snprintf_P( hostname, 32, PSTR("%S-%04X"), HOSTNAME, ESP.getChipId() & 0xFFFF);
 }
 
 /*
@@ -506,11 +540,11 @@ void calcTelemetryTopic() {
  * 
  */
 void IOT_setAttributes() {
-    String s = "[{\"type\":\"ESP8266\"}," \
-                 "{\"ipaddr\":\"" + thisDevice.toString() + "\"}," \
+    String s = "[{\"type\":\"PowerMeter8266\"}," \
+                 "{\"hostname\":\"" + String(hostname) + "\"}," \
                  "{\"ssid\":\""+ WiFi.SSID() + "\"}," \
                  "{\"rssi\":\""+ String(WiFi.RSSI()) + "\"}," \
-                 "{\"web\":\"http://" + thisDevice.toString() + "\"}," \
+                 "{\"ip\":\"" + thisDevice.toString() + "\"}," \
                  "{\"dataok\":" + String(pzemDataOK) + "}," \
                  "{\"datanok\":" + String(pzemDataNOK) + "}" \
                  "]";
@@ -563,7 +597,7 @@ int days;
      }
    }
 
-   Log.I("delta: " + String(delta));
+   //Log.I("delta: " + String(delta));
 
     switch (pumpState)
     { 
@@ -630,8 +664,8 @@ void MQTT_callback(String &topic, String &payload) {
   int pinEnabled = 0;
    
   switch( hash(method) ){
-    case hash("pumpDisabled") : 
-    Log.I("Pump disabled detected");
+   // case hash("pumpDisabled") : 
+   // Log.I("Pump disabled detected");
 
 
     case hash("getPumpRelayStatus") :
@@ -693,6 +727,71 @@ void MQTT_callback(String &topic, String &payload) {
        }
     break;
 
+
+//----remote admin commands
+    case hash("getPumpAdminCommand") :
+      //pin 10  -- enable syslog
+      //pin 20  -- Reset KWH
+      if (syslogEnabled==0) {
+        IOT_setsubscribedTelemetry("{\"10\":false,\"20\":false}",serialNo);
+      } else {
+        IOT_setsubscribedTelemetry("{\"10\":true,\"20\":false}",serialNo);
+      }
+      break;
+
+    case hash("setPumpAdminCommand") :
+
+      if(doc.containsKey("params")) 
+      {
+        pin = doc["params"]["pin"];
+        pinEnabled = (doc["params"]["enabled"]); 
+      } 
+
+      switch (pin) 
+      {
+        case 10 :  Log.I("syslog debug");
+          if (pinEnabled)
+          {
+            IOT_setsubscribedTelemetry("{\"10\":true}",serialNo);
+            Log.setUdp( true );
+            syslogEnabled = 1;
+            Log.I("Enabled syslog output to: " + String(UDPLOG_Server) );
+          } else {
+            IOT_setsubscribedTelemetry("{\"10\":false}",serialNo);
+            syslogEnabled = 0;
+            Log.I("Disabled syslog output to: " + String(UDPLOG_Server) );
+            Log.setUdp( false );
+          }
+        break;
+
+        case 20 :  Log.I("Reset KWH");
+          if (pinEnabled)
+          {
+            IOT_setsubscribedTelemetry("{\"20\":false}",serialNo);
+            //ResetKWH();
+            if ( (mState==3) && pzem.resetEnergy() )
+            {
+              Log.I("PZEM Energy cleared");
+              mState = 2;   // forcce a read now
+            } else {
+              Log.I("Failed to clear PZEM Energy");
+            }
+          } else {
+            IOT_setsubscribedTelemetry("{\"20\":false}",serialNo);
+          }
+          break;
+        
+        default:
+          Log.I("Unknown pin:" + pin);
+       }
+    break;
+
+
+
+
+
+
+
     default:
       Log.I("Unknown request");
       Log.I(method); 
@@ -702,14 +801,23 @@ void MQTT_callback(String &topic, String &payload) {
 
 //* Connects to the MQTT Broker
 void MQTT_Connect() {
-    Log.I("Connecting to MQTT Broker...");
     MQTT_client.begin( MQTT_Server, MQTT_Port , WIFIClient );
     MQTT_client.onMessage( MQTT_callback );
-    MQTT_client.setOptions( 120, true, 120 );
+    MQTT_client.setOptions( 120, true, 500 );
 
+    unsigned int i=0;
     while (! MQTT_client.connect( MQTT_ClientID, MQTT_UserID, MQTT_Password ) ) {
-        Log.E("MQTT Connection failed.");
+        i++;
+        Log.E("MQTT Connection failed. " + String(i));
+        //need to buid state machine and make it partof loop---this is happening too often
+        //delay here is bad and counter is just a hack if things go really wrong
         delay(1000);
+        if (i>900)
+        {
+          Log.E("Start from scratch.... Rebooting");
+          ESP.restart();
+        }
+
     }
 
     calcAttributesTopic();
@@ -759,6 +867,7 @@ void OTA_Setup() {
 
     Log.I("Setting up OTA...");
     ArduinoOTA.setHostname( hostname );
+    ArduinoOTA.setPassword( OTAPassword );
     ArduinoOTA.begin();
 
     // OTA callbacks
@@ -826,6 +935,22 @@ void display_WIFIInfo() {
 }
 
 /*
+ * back_tasks:  Executes the background tasks
+ * 
+ * Calls the functions necessary to keep everything running smoothly while waiting or looping
+ * Such tasks include mantaining the MQTT connection, checking OTA status and updating the timers.
+ * 
+ */
+
+void back_tasks() {
+    MQTT_client.loop();           // Handle MQTT
+    timer.run();                  // Handle SimpleTimer
+
+}
+
+
+
+/*
  * WIFI_Setup: Setup the WIFI connection.
  * 
  * It cycles over the configured access points until a sucessufull connection is done
@@ -845,6 +970,8 @@ void WIFI_Setup() {
     WiFi.disconnect();
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_STA);
+    WiFi.hostname(hostname);
+    WiFi.setSleepMode(WIFI_NONE_SLEEP);
 
    
 
@@ -912,18 +1039,6 @@ void check_Connectivity() {
 }
 
 
-/*
- * back_tasks:  Executes the background tasks
- * 
- * Calls the functions necessary to keep everything running smoothly while waiting or looping
- * Such tasks include mantaining the MQTT connection, checking OTA status and updating the timers.
- * 
- */
-
-void back_tasks() {
-    MQTT_client.loop();           // Handle MQTT
-    timer.run();                  // Handle SimpleTimer
-}
 
 void PWRMeter_Connect() {
     //uint8_t tries = 0;
@@ -983,14 +1098,14 @@ int PWRMeter_getData() {
     // Execute the back ground tasks otherwise we may loose conectivity to the MQTT broker.
     back_tasks();
  
-    //float i = pzem.current(ip);
-    //float p = pzem.power(ip);
-    //float e = pzem.energy(ip);
+
     float amps = pzem.current();
     float watts = pzem.power();
     float kwh = pzem.energy();
     float pf = pzem.pf();
+    back_tasks();
     float hz = pzem.frequency();
+
 
     // Turn led off:
     digitalWrite( MONITOR_LED, HIGH); 
@@ -1016,9 +1131,9 @@ int PWRMeter_getData() {
      }       
      s = s + "}";
 
-Log.I("next data time:" + String(RelaySendTelemetryTime) );
-Log.I(" current time:" + String(now()));
-Log.I("   delta time:" + String(RelaySendTelemetryTime-now()));
+//Log.I("next data time:" + String(RelaySendTelemetryTime) );
+//Log.I(" current time:" + String(now()));
+//Log.I("   delta time:" + String(RelaySendTelemetryTime-now()));
     Log.I("-> Power Meter data: ");
     Log.I( s );
 
@@ -1115,6 +1230,7 @@ void setup() {
   // Setup Logging system.
   //Log.I("Enabling UDP Log Server...");
   //Log.setUdp( true );                  // Log to UDP server when connected to WIFI.
+  //syslogEnabled = 1;
   Log.W("------------------------------------------------> Power Meter REBOOT");
 
   // Setup OTA
@@ -1178,10 +1294,14 @@ void loop() {
                 } else {   //failed to read retry in shorter time span
                   mRetries++;
 
-                  if (mRetries >= 10) {
+                  if (mRetries%10==0) {
                      Log.E("No valid data obtained from the PowerMeter after 10 tries");
                      timer.setTimeout(PZEM_SLEEP_TIME, PWRMeter_ReadState);
-                     mRetries = 0;
+                     //mRetries = 0;
+                     if (mRetries > 999) 
+                     {  // give up and try to connect again...
+                       mState=0;
+                     }
                   } else {
                     timer.setTimeout(PZEM_RETRY_TIME, PWRMeter_ReadState); 
                   }           
@@ -1199,10 +1319,11 @@ void loop() {
     }
 
     back_tasks();
-    MQTT_client.loop();           // Handle MQTT
+    //just did it in back_task
+    // MQTT_client.loop();           // Handle MQTT
+    //timer.run();                  // Handle SimpleTimer
     ArduinoOTA.handle();          // Handle OTA.
-    timer.run();                  // Handle SimpleTimer
-
+ 
     leftBtn.read();
     rightBtn.read();
 
@@ -1267,11 +1388,17 @@ void loop() {
       displayTickTime = millis() + 30;
 
       // Should check for error. rtn < 0 indicates error.
-      int8_t rtn = display.tickerTick(&displayState5);
+      int8_t rtn = display.tickerTick(&displayState4);
       if (rtn <= RTN_CHECK) 
       {
         // Should check for error. Return of false indicates error.
         //display.tickerText(&displayState, text[(displayN++)%3]);
+        display.tickerText(&displayState4, displayTickerText4[displayTickerTextI4%2]); 
+      }
+
+      rtn = display.tickerTick(&displayState5);
+      if (rtn <= RTN_CHECK) 
+      {
         display.tickerText(&displayState5, displayTickerText5[displayTickerTextI5%2]); 
       }
 

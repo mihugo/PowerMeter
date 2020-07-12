@@ -133,6 +133,12 @@ void TimeProvider::setup() {
 
 void TimeProvider::logTime() {
     const char * Days [] ={"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
-    String datetime = String(Days[weekday()-1]) + ", " + day() +"/"+ month() + "/" + year() + " " + hour() + ":" + minute() + ":" + second();
+    //String datetime = String(Days[weekday()-1]) + ", " + day() +"/"+ month() + "/" + year() + " " + hour() + ":" + minute() + ":" + second();
+    //this is barbaric as there must be a simpler way to format these strings with leading zeros ... in one line 
+    char m[3];
+    snprintf(m, 3, "%02i", minute() );
+    char s[3];
+    snprintf(s, 3, "%02i", second() );
+    String datetime = String( Days[weekday()-1]) + ", " + month() +"/"+ day() + "/" + year() + " " + hour() + ":" + m + ":" + s;
     Log.I( datetime);
 }

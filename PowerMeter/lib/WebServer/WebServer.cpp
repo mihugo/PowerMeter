@@ -64,12 +64,14 @@ void WebServer::setup()
 
     server.onNotFound( Web_PageNotFound );
 
-    server.on("/trianglify.min.js", HTTP_GET, [](AsyncWebServerRequest *request) {
+    /* removing this since it seams to consume too much memory and breaks the webpage perhaps some pointer being overwritten...?
+      server.on("/trianglify.min.js", HTTP_GET, [](AsyncWebServerRequest *request) {
         AsyncWebServerResponse *response = request->beginResponse_P(200, "text/javascript",
-            trianglify_min_js_gz, sizeof(trianglify_min_js_gz));
+           trianglify_min_js_gz, sizeof(trianglify_min_js_gz));
         response->addHeader("Content-Encoding", "gzip");
         request->send(response);
     });
+    */
 
   server.begin();
 

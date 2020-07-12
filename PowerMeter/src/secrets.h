@@ -27,7 +27,7 @@ static char const *APs[NUMAPS][2] = {
 #define UDPLOG_Port    514
 
 #define HOSTNAME "PumpPowerMeter"
-#define UDPLOG_Server  "192.168.1.68"     // My local PC, but should be a server"
-#define UDPLOG_Port    5014
+//#define StartupMsg "Hello      \nWorld      \n           \n           \n           \n           "
+//#define OTAPassword "donttellanyone"
 
 #endif

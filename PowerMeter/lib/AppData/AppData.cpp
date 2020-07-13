@@ -2,6 +2,7 @@
 #include <WiFiClient.h>
 #include <WiFiUdp.h>
 #include <AppData.hpp>
+#include <TimeProvider.hpp>
 
 AppData appData;
 
@@ -125,4 +126,58 @@ String AppData::getLogServerIPInfo() {
 
 String AppData::getHeap() {
     return String(ESP.getFreeHeap());
+}
+
+void AppData::setRelayState(int pumpStateIn) {
+   m_pumpState = pumpStateIn;
+}
+
+String AppData::getRelayState() {
+    switch ( m_pumpState) {
+        case -1: return String("Disabled");
+        case 0:   return String("Normal");
+        case 1:    return String("Override");
+        default: return ("State Error");
+    }
+}
+
+
+void AppData::setPumpOffTime(int pumpOffTimeIn) {
+   m_pumpOffTime = pumpOffTimeIn;
+}
+
+String AppData::getPumpOffTime() {
+ 
+  String s = "---";  
+  time_t delta = now();
+  char o[15];
+  int days;
+   
+  if (m_pumpState!=0) {
+
+    //time should be possitive for correct output
+    if (m_pumpOffTime >= delta)
+    {
+      delta = m_pumpOffTime - delta;
+      days = delta / 86400;
+      if (days > 0) {
+        snprintf(o,15,"%i %2i:%02i:%02i", days, hour(delta), minute(delta), second(delta) );
+      } else {
+        snprintf(o,15,"%2i:%02i:%02i", hour(delta), minute(delta), second(delta) );
+      }
+    } else {
+      delta = delta - m_pumpOffTime;
+      days = delta / 86400;
+      if (days > 0) {
+        snprintf(o,15,"-%i %2i:%02i:%02i", days, hour(delta), minute(delta), second(delta) );
+      } else {
+        snprintf(o,15,"-%2i:%02i:%02i", hour(delta), minute(delta), second(delta) );
+      }
+    }
+
+    s = o;
+  }
+
+  return(s);
+
 }

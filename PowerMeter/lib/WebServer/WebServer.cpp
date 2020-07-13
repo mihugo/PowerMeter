@@ -41,7 +41,9 @@ void Web_RootPage( AsyncWebServerRequest *request )
                                       appData.getPf().c_str(), \
                                       appData.getSamplesOK().c_str(), \
                                       appData.getSamplesNOK().c_str(), \
-                                      appData.getPZEMState().c_str() );
+                                      appData.getPZEMState().c_str(), \
+                                      appData.getRelayState().c_str(), \
+                                      appData.getPumpOffTime().c_str() );
 
   response->print( TEMPLATE_FOOTER);
 

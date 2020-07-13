@@ -80,7 +80,7 @@ const char TEMPLATE_HEADER[] =
   "%s"
   "W"
   "</td></tr>"
-"<tr><td><i class=\"glyphicon glyphicon-scale\"></i></td><td><b>Frequency: </b></td><td>"
+"<tr><td><i class=\"glyphicon glyphicon-music\"></i></td><td><b>Frequency: </b></td><td>"
   // getFrequency()
   "%s"
   "hz"
@@ -116,29 +116,29 @@ const char TEMPLATE_HEADER[] =
   "</div>"
   "</div>"
 
-/*
+
 "<div class=\"col-md-4\">"
   "<div class=\"panel panel-primary\">"
   "<div class=\"panel-heading\">"
   "<h3 class=\"panel-title\"><b>Relay Control</b></h3>"
   "</div>"
   "<table class=\"table table-striped\"><thead><tr><th></th><th>Parameter</th><th>Value</th></tr></thead><tbody>"
-  "<tr><td><i class=\"glyphicon glyphicon-scale\"></i></td><td><b>Pump Override: </b></td><td>"
-  //"%s"
+  "<tr><td><i class=\"glyphicon glyphicon-alert\"></i></td><td><b>Pump State: </b></td><td>"
+  "%s"
+  //getPumpState()
 
+ 
   "</td></tr>"
-  "<tr><td><i class=\"glyphicon glyphicon-scale\"></i></td><td><b>Pump Disabled:</b></td><td>"
-  //"%s"
+    "<tr><td><i class=\"glyphicon glyphicon-hourglass\"></i></td><td><b>Time:</b></td><td>"
+  "%s"
+//getPumpOffTime() {
 
-  "</td></tr>"
-    "<tr><td><i class=\"glyphicon glyphicon-scale\"></i></td><td><b>Time:</b></td><td>"
-  //"%s"
 
   "</td></tr>"
   "</tr></tbody></table>"
   "</div>"
   "</div>"
-*/
+
 
 ;
 

@@ -24,7 +24,7 @@
 #include "secrets.h"
 
 
-#define  FW_Version "1.0.1"
+#define  FW_Version "7/12/20"
 
 //#include <string.h>
 //#include <stdlib.h>
@@ -423,7 +423,9 @@ void pumpCheck() {
     {
       pumpNormal();
       pumpOffTime = 0;
+      appData.setPumpOffTime(pumpOffTime);
       pumpState = 0;
+      appData.setRelayState(pumpState);
       sendPumpStatus();
     }
   }
@@ -440,21 +442,27 @@ void pumpOverrideMode() {
     case -1:
         //Serial.println("Pump no longer disabled"); 
         pumpState = 0;
+        appData.setRelayState(pumpState);
         pumpOffTime = 0;
+        appData.setPumpOffTime(pumpOffTime);
         pumpNormal();
         break;
     case 0:
         //Serial.println("Pump override for 1 hours"); 
         pumpState = 1;
+        appData.setRelayState(pumpState);
         pumpOffTime = now() + 1 * 3600;
+        appData.setPumpOffTime(pumpOffTime);
         pumpOverride();
         break;
     case 1:
         //Serial.println("Pump Adding 1 hours to override time"); 
         pumpState = 1;
-        pumpOffTime =  pumpOffTime + 1 * 3600;
+        appData.setRelayState(pumpState);
+        pumpOffTime =  pumpOffTime + 1 * 3600;     
         if (pumpOffTime - now() > 3 * 3600 )   // set max pump on time to 3 hours.
           pumpOffTime = now() + 3 * 3600;
+        appData.setPumpOffTime(pumpOffTime);
         pumpOverride();    // not really necesary since already in this mode
         break;
   }
@@ -475,18 +483,23 @@ void pumpDisableMode() {
     case -1:
         Log.I("Pump already disabled"); 
         //pumpState = -1;
+        //appData.setRelayState(pumpState);
         pumpDisable();
         break;
     case 0:
         Log.I("Pump Disabled"); 
         pumpState = -1;
+        appData.setRelayState(pumpState);
         pumpOffTime = now();
+        appData.setPumpOffTime(pumpOffTime);
         pumpDisable();
         break;
     case 1:
         Log.I("Pump Override canceled"); 
         pumpState = 0;
+        appData.setRelayState(pumpState);
         pumpOffTime =  0;
+        appData.setPumpOffTime(pumpOffTime);
         pumpNormal();
         break;
   }
@@ -704,7 +717,9 @@ void MQTT_callback(String &topic, String &payload) {
           } else {
             IOT_setsubscribedTelemetry("{\"1\":false}",serialNo);
             pumpState = 0;
+            appData.setRelayState(pumpState);
             pumpOffTime = 0;
+            appData.setPumpOffTime(pumpOffTime);
             pumpNormal();
             sendPumpStatus();
           }
@@ -717,7 +732,9 @@ void MQTT_callback(String &topic, String &payload) {
           } else {
             IOT_setsubscribedTelemetry("{\"2\":false}",serialNo);
             pumpState = 0;
+            appData.setRelayState(pumpState);
             pumpOffTime = 0;
+            appData.setPumpOffTime(pumpOffTime);
             pumpNormal();
             sendPumpStatus();
           }
@@ -772,7 +789,7 @@ void MQTT_callback(String &topic, String &payload) {
             if ( (mState==3) && pzem.resetEnergy() )
             {
               Log.I("PZEM Energy cleared");
-              mState = 2;   // forcce a read now
+              mState = 2;   // force a read now
             } else {
               Log.I("Failed to clear PZEM Energy");
             }

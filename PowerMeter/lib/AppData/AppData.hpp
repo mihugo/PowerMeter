@@ -24,6 +24,8 @@ private:
     unsigned long m_samplesNOK= 0;
 
     uint8_t    m_PZEMState = 0;    // 0 - Not Connected, 1 - Connecting, 2 - Connected.
+    int     m_pumpState = 0;  
+    int     m_pumpOffTime = 0;
 
 public:
 
@@ -59,6 +61,11 @@ public:
 
     String getSamplesOK();
     String getSamplesNOK();
+
+    String getRelayState();
+    void   setRelayState(int);
+    String getPumpOffTime();
+    void   setPumpOffTime(int);
 };
 
 extern AppData appData;

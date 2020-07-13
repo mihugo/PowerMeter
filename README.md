@@ -1,4 +1,11 @@
 # PowerMeter
+This fork has been updated from the original code to include:
+  support for V3 of PZEM modules
+  Added LCD display
+  Added relay control to both override and disble
+  Added 2 push buttons for local control to cylce through various display screens and enable and disable relays
+  
+
 This repository holds a PZEM-004T and ESP8266 based power/energy meter. More information at: https://primalcortex.wordpress.com/2019/07/06/measuring-home-energy-consumption-with-the-pzem004t-and-esp8266/
 
 The repository structure is as follows:

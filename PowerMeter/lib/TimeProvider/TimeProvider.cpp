@@ -43,7 +43,8 @@ void sendNTPpacket(IPAddress &address)
 
 
 
-int dstOffset (unsigned long unixTime)
+//int dstOffset (unsigned long unixTime)
+int dstOffset (time_t t)
 {
   //borrowed from: https://forum.arduino.cc/index.php?topic=197637.0
   //this only works in the US but could be made to work WW with a bit of work
@@ -63,7 +64,7 @@ int dstOffset (unsigned long unixTime)
     return (0);    //no DST for our timezone
   }
 
-  time_t t = unixTime;
+  //time_t t = unixTime;
   int beginDSTDay = (14 - (1 + year(t) * 5 / 4) % 7); 
   int beginDSTMonth=3;
   int endDSTDay = (7 - (1 + year(t) * 5 / 4) % 7);
@@ -76,6 +77,12 @@ int dstOffset (unsigned long unixTime)
     return (3600);  //Add back in one hours worth of seconds - DST in effect
   else
     return (0);  //NonDST
+}
+
+
+int TimeProvider::utcOffset (time_t t)
+{
+    return ( NTP_TIMEZONES * SECS_PER_HOUR + dstOffset(t) );
 }
 
 
@@ -100,7 +107,8 @@ time_t getNtpTime()
             secsSince1900 |= (unsigned long)packetBuffer[42] << 8;
             secsSince1900 |= (unsigned long)packetBuffer[43];
             unsigned long unixTime = secsSince1900 - 2208988800UL;
-            return unixTime + NTP_TIMEZONES * SECS_PER_HOUR + dstOffset(unixTime);
+            return unixTime;
+           // return unixTime + NTP_TIMEZONES * SECS_PER_HOUR + dstOffset(unixTime);
         }
     }
     Log.E("No NTP Response :-(");

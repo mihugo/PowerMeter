@@ -24,7 +24,7 @@
 #include "secrets.h"
 
 
-#define  FW_Version "7/12/20"
+#define  FW_Version "8/2/20"
 
 //#include <string.h>
 //#include <stdlib.h>
@@ -185,16 +185,18 @@ if (screen==INT_MIN)
         case 1: //Status screen
 
           
-          if (WiFi.status() ==  WL_CONNECTED) {
+          //if (WiFi.status() ==  WL_CONNECTED) 
+          {
             thisDevice = WiFi.localIP();
             const char * Days [] ={"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
-            
+            time_t t = now();
+            t=t + timeProvider.utcOffset(t);
             //this is barbaric as there must be a simpler way to format these strings with leading zeros 
             char m[3];
-            snprintf(m, 3, "%02i", minute() );
+            snprintf(m, 3, "%02i", minute(t) );
             char s[3];
-            snprintf(s, 3, "%02i", second() );
-            String datetime = String( Days[weekday()-1]) + ", " + month() +"/"+ day() + "/" + year() + " " + hour() + ":" + m + ":" + s;
+            snprintf(s, 3, "%02i", second(t) );
+            String datetime = String( Days[weekday(t)-1]) + ", " + month(t) +"/"+ day(t) + "/" + year(t) + " " + hour(t) + ":" + m + ":" + s;
 
 
             if (prevScreen != 1 ) 
@@ -259,10 +261,10 @@ if (screen==INT_MIN)
 
               if (displayTickTime == ULONG_MAX) displayTickTime = millis() + 30;  // re-enable scroll
 
-          } else  //update same screen
+            } else  //update same screen
             {
               display.setCursor(0,0);
-              display.println(WiFi.SSID());
+              display.println(WiFi.SSID() + "          ");
 
               
               displayTickerTextI2++;
@@ -285,13 +287,14 @@ if (screen==INT_MIN)
 
           }
             
-          } else {  //status with no WIFI connected
+          }  
+           /* else {  //status with no WIFI connected
             displayTickTime = ULONG_MAX; //disable scroll
             display.clear();
             display.println("WiFi...");
             display.println(miscText);
-            screen = -1; //force an update next time
-          }
+            //screen = -1; //force an update next time
+          } */
           break;
 
         case 2: //Power Display Screen
@@ -392,7 +395,7 @@ void pumpIOsetup()  {
   pinMode( PUMP_DISABLED, OUTPUT);
   pinMode( PUMP_ON, OUTPUT);
 }
-
+  
 //sets pump relay to normal mode -- both relays off
 void pumpNormal() {
   digitalWrite( PUMP_DISABLED, LOW);
@@ -531,7 +534,9 @@ void setHostname() {
 
 //* Supporting functions:
 void calcAttributesTopic() {
-    String s = "iot/device/" + String(MQTT_ClientID) + "/attributes";
+    //String s = "iot/device/" + String(MQTT_ClientID) + "/attributes";
+    String s = MQTT_TelemetryTopic_Root + String(MQTT_ClientID) + "/attributes";
+    
  //   String s = MQTT_TelemetryTopic_Root + String(MQTT_ClientID) + "/attributes";
     s.toCharArray(MQTT_AttributesTopic,256,0);
 }
@@ -545,6 +550,27 @@ void calcTelemetryTopic() {
     Log.I(MQTT_TelemetryTopic);
 }
 
+int subscribeTelemetrySubtopic() {
+
+String subtopic = String(MQTT_TelemetryTopic_Root) + String(MQTT_ClientID) + "/rpc/request/+";
+   
+    int err;
+    //err =  MQTT_client.subscribe("v1/devices/me/rpc/request/+",1);
+    err =  MQTT_client.subscribe(subtopic,1);
+    if (! err ) {
+      Log.E("failed to subscribe to pump/override.");
+      Serial.print("failed, err=");
+      Serial.print(err);
+      Serial.print(" rc=");
+      Serial.print(MQTT_client.returnCode());
+      Serial.print(" last error=");
+      Serial.println(MQTT_client.lastError());
+      //const char lwmqtt_err_text[][28] = { "SUCCESS", "BUFFER_TOO_SHORT", "VARNUM_OVERFLOW", "NETWORK_FAILED_CONNECT", "NETWORK_TIMEOUT", "NETWORK_FAILED_READ", "NETWORK_FAILED_WRITE", "REMAINING_LENGTH_OVERFLOW", "REMAINING_LENGTH_MISMATCH", "MISSING_OR_WRONG_PACKET", "CONNECTION_DENIED", "FAILED_SUBSCRIPTION", "SUBACK_ARRAY_OVERFLOW", "PONG_TIMEOUT", "UNKNOWN" };
+      //const char lwmqtt_return_code_text[][25] = { "CONNECTION_ACCEPTED", "UNACCEPTABLE_PROTOCOL", "IDENTIFIER_REJECTED", "SERVER_UNAVAILABLE", "BAD_USERNAME_OR_PASSWORD", "NOT_AUTHORIZED", "UNKNOWN_RETURN_CODE", "UNKNOWN" };
+    } 
+    return err;
+}
+
 
 /*
  * IOT Support:
@@ -553,14 +579,16 @@ void calcTelemetryTopic() {
  * 
  */
 void IOT_setAttributes() {
-    String s = "[{\"type\":\"PowerMeter8266\"}," \
-                 "{\"hostname\":\"" + String(hostname) + "\"}," \
-                 "{\"ssid\":\""+ WiFi.SSID() + "\"}," \
-                 "{\"rssi\":\""+ String(WiFi.RSSI()) + "\"}," \
-                 "{\"ip\":\"" + thisDevice.toString() + "\"}," \
-                 "{\"dataok\":" + String(pzemDataOK) + "}," \
-                 "{\"datanok\":" + String(pzemDataNOK) + "}" \
-                 "]";
+    String s = "{" \
+               "\"type\":\"PowerMeter8266\"," \
+               "\"hostname\":\"" + String(hostname) + "\"," \
+               "\"ssid\":\""+ WiFi.SSID() + "\"," \
+               "\"rssi\":\""+ String(WiFi.RSSI()) + "\"," \
+               "\"ip\":\"" + thisDevice.toString() + "\"," \
+               "\"dataok\":" + String(pzemDataOK) + "," \
+               "\"datanok\":" + String(pzemDataNOK) + "," \
+               "\"FW_Version\":\"" + String(FW_Version) + "\"" \
+               "}";
     
     s.toCharArray( SensorAttributes, 512,0);
     Log.I("PowerMeter Attributes:");
@@ -617,7 +645,8 @@ int days;
       case -1:
         s = s + "\"pumpState\":\"Disabled\"" + \
                 ",\"PumpStateTime\":\"" + o +"\"" + \
-                ",\"PumpOffTime\":" + String(pumpOffTime); //horrible hack--NTPZ needs to be used here and properly initilazied  to return utc date
+                ",\"PumpOffTime\":" + String(pumpOffTime);
+               // ",\"PumpOffTime\":" + String(pumpOffTime + 8 * SECS_PER_HOUR - timeProvider.dstOffset( pumpOfftime ) ); //horrible hack does not work
         break;
       case 0:
         s = s + "\"pumpState\":\"Normal\"" + \
@@ -817,6 +846,7 @@ void MQTT_callback(String &topic, String &payload) {
 }
 
 //* Connects to the MQTT Broker
+/*
 void MQTT_Connect() {
     MQTT_client.begin( MQTT_Server, MQTT_Port , WIFIClient );
     MQTT_client.onMessage( MQTT_callback );
@@ -840,12 +870,6 @@ void MQTT_Connect() {
     calcAttributesTopic();
     calcTelemetryTopic();
 
-    //MQTT_client.subscribe("pump/override");
-
-    static int subscribeOK = 0;
-    
-    if (subscribeOK == 0) {
-
     String subtopic = String(MQTT_TelemetryTopic_Root) + String(MQTT_ClientID) + "/rpc/request/+";
    
     int err;
@@ -861,19 +885,81 @@ void MQTT_Connect() {
       Serial.println(MQTT_client.lastError());
       //const char lwmqtt_err_text[][28] = { "SUCCESS", "BUFFER_TOO_SHORT", "VARNUM_OVERFLOW", "NETWORK_FAILED_CONNECT", "NETWORK_TIMEOUT", "NETWORK_FAILED_READ", "NETWORK_FAILED_WRITE", "REMAINING_LENGTH_OVERFLOW", "REMAINING_LENGTH_MISMATCH", "MISSING_OR_WRONG_PACKET", "CONNECTION_DENIED", "FAILED_SUBSCRIPTION", "SUBACK_ARRAY_OVERFLOW", "PONG_TIMEOUT", "UNKNOWN" };
       //const char lwmqtt_return_code_text[][25] = { "CONNECTION_ACCEPTED", "UNACCEPTABLE_PROTOCOL", "IDENTIFIER_REJECTED", "SERVER_UNAVAILABLE", "BAD_USERNAME_OR_PASSWORD", "NOT_AUTHORIZED", "UNKNOWN_RETURN_CODE", "UNKNOWN" };
-
-//lwmqtt_err_t lastError();
-//lwmqtt_return_code_t returnCode();
-        delay(1000);
-        subscribeOK++;
     } 
-    } else {   //every other failure try again
-      subscribeOK = 0;
-    }
-
-
 
     Log.I("Connected to MQTT!");
+}
+*/
+
+void MQTT_ConnectLoop() {
+static int MQTT_ConnectLoopState = 0;         //0 initialize connect; 1 trying connection; 2 subscribe telemetry; 5 connected
+static unsigned long MQTTconnStartTime = 0;       // time last connection attempt started
+static int MQTT_ConnectLoopTries = 1;         //how many times have we failed to connect
+
+if ( WiFi.status() == WL_CONNECTED )   // if wifi is not connnected just skip
+{
+
+  switch (MQTT_ConnectLoopState)
+      {
+          case 0:
+            Log.E("Initialzing MQTT Connection attempt: " + String(MQTT_ConnectLoopTries));
+            MQTT_client.begin( MQTT_Server, MQTT_Port , WIFIClient );
+            MQTT_client.onMessage( MQTT_callback );
+            MQTT_client.setOptions( 120, true, 500 );
+            MQTT_ConnectLoopState = 1;
+          break;
+
+          case 1: 
+            if (millis() - MQTTconnStartTime > 2000)  
+            {   // try to connect -- this will block but only for a moment
+              if  (! MQTT_client.connect( MQTT_ClientID, MQTT_UserID, MQTT_Password ) ) 
+              {  
+                MQTT_ConnectLoopTries++;
+                Log.E("MQTT Connection failed. " + String(MQTT_ConnectLoopTries));
+                MQTTconnStartTime = millis();
+              
+                if (MQTT_ConnectLoopTries>43200) // after a day of trying just reboot
+                {
+                Log.E("To many failures. Start from scratch.... Rebooting");
+                ESP.restart();
+                }
+              } else {  // we are connected
+                MQTTconnStartTime = millis();
+                //MQTT_ConnectLoopTries = 1;
+                calcAttributesTopic();
+                calcTelemetryTopic();
+                MQTT_ConnectLoopState = 2;
+                Log.I("Connected to MQTT!");
+              }
+
+            }
+          break;
+
+          case 2:
+            subscribeTelemetrySubtopic();
+            MQTT_ConnectLoopState = 3;
+          break;
+
+         case 3:
+            IOT_setAttributes();  // At connection send the attributes
+            MQTT_ConnectLoopTries = 1;
+            MQTT_ConnectLoopState = 5;
+          break;
+
+          case 5:
+            if (!MQTT_client.connected()) 
+            {
+              MQTT_ConnectLoopState = 0;
+            }
+          break;
+
+          default:
+            Log.I("Invalid MQTT_ConnectLoopState");
+            MQTT_ConnectLoopState = 0;
+          break;
+
+      }
+  }
 }
 
 /*
@@ -973,12 +1059,15 @@ void back_tasks() {
  * It cycles over the configured access points until a sucessufull connection is done
  * 
  */
+
+/*
 void WIFI_Setup() {
     bool   connected = false;
     char   *ssid;
     char   *pwd;
     int    cntAP = 0;
     int    tries = 0;
+
     String out;
 
     Log.I("Connecting to WIFI...");
@@ -1021,14 +1110,92 @@ void WIFI_Setup() {
                 connected = true;
     }
 
-/*    WiFi.macAddress(MAC_address);
-    for (unsigned int i = 0; i < sizeof(MAC_address); ++i){
-      sprintf(MAC_char,"%s%02x:",MAC_char,MAC_address[i]);
-    }
-*/  
+//    WiFi.macAddress(MAC_address);
+//  for (unsigned int i = 0; i < sizeof(MAC_address); ++i){
+//      sprintf(MAC_char,"%s%02x:",MAC_char,MAC_address[i]);
+//    }
+  
     display_WIFIInfo();
     updateLCD(1);
 }
+
+*/
+
+// connect to WIFI but use a state machine to do the work--should be called in main loop
+void WIFI_SetupLoop() {
+    char   *ssid;
+    char   *pwd;
+    static int cntAP = 0;
+    static int WIFI_SetupLoopState = 0;         //0 initialize connect; 1 waiting for connection; 5 connected
+    static unsigned long WIFIconnStartTime = 0;     // time last connection attempt started
+
+
+    switch (WIFI_SetupLoopState)
+    {
+        case 0: 
+          Log.I("Connecting to WIFI...");
+        
+          // Station mode.
+          WiFi.disconnect();
+          WiFi.softAPdisconnect(true);
+          WiFi.mode(WIFI_STA);
+          WiFi.hostname(hostname);
+          WiFi.setSleepMode(WIFI_NONE_SLEEP);
+
+          ssid = (char *)APs[cntAP][0];
+          pwd = (char *)APs[cntAP][1];
+          Log.I("Connecting to: ");
+          Log.I(ssid);
+          updateLCD(1,ssid);
+          WiFi.begin(ssid, pwd );
+          WIFI_SetupLoopState = 1;
+          WIFIconnStartTime = millis();
+        break;
+
+        case 1:
+          if (WiFi.status() == WL_CONNECTED) 
+          {
+            WIFI_SetupLoopState = 5;
+            display_WIFIInfo();
+            if (now() < 1596420000 )  // see if the time is more or less right and if not set it.
+            {
+              timeProvider.setup();
+              timeProvider.logTime();
+            }
+            //updateLCD(1);
+            
+          } else {
+            if(millis() - WIFIconnStartTime > 10000) 
+            { // too much time -- try the next AP
+              cntAP++;
+              if (cntAP == NUMAPS )
+                cntAP = 0;
+                ssid = (char *)APs[cntAP][0];
+                pwd = (char *)APs[cntAP][1];
+                Log.I("Trying next AP connection: ");
+                Log.I(ssid);
+                updateLCD(1,ssid);
+                WiFi.begin(ssid, pwd );
+                WIFIconnStartTime = millis();
+            }
+          }
+        break;
+
+        case 5:
+          if (WiFi.status() != WL_CONNECTED) 
+          {
+            WIFI_SetupLoopState = 0;
+          }
+        break;
+
+        default:
+          Log.I("Invalid Wifi_SetupLoopState");
+          WIFI_SetupLoopState = 0;
+        break; 
+    }
+        
+}
+
 
 /*
  * check_Connectivity:  Checks the connectivity. 
@@ -1038,24 +1205,25 @@ void WIFI_Setup() {
  * 
  */
 
-void check_Connectivity() {
+/*void check_Connectivity() {
 
-        /* Check WIFI connection first. */        
-        if ( WiFi.status() != WL_CONNECTED ) {
-            Log.I("calling WIFI_Setup");
-            WIFI_Setup();
-            MQTT_Connect();
-        } else {
-            /* Check MQTT connectivity: */
-            if ( !MQTT_client.connected() ) {
-                MQTT_Connect();
+        // Check WIFI connection first.         
+      //  if ( WiFi.status() != WL_CONNECTED ) {
+     //       Log.I("calling WIFI_Setup");
+          //  WIFI_Setup();
+            WIFI_SetupLoop();
+            //MQTT_Connect();  -- next loop will figure this out....
+   //     } else {
+            // Check MQTT connectivity: 
+            if ( WiFi.status() == WL_CONNECTED &&  !MQTT_client.connected() ) {
+                MQTT_ConnectLoop();
                 // Send the IOT device attributes at MQTT connection
                 IOT_setAttributes();
             }
-        }
+ //       }
 }
 
-
+*/
 
 void PWRMeter_Connect() {
     //uint8_t tries = 0;
@@ -1242,7 +1410,8 @@ void setup() {
 
   // We set WIFI first...
     
-  WIFI_Setup();
+  // --- main loop will set this up.....
+  //WIFI_Setup();
   
   // Setup Logging system.
   //Log.I("Enabling UDP Log Server...");
@@ -1254,16 +1423,16 @@ void setup() {
   OTA_Setup();
 
   // Set time provider to know current date and time
-  timeProvider.setup();
-  timeProvider.logTime();
+  //timeProvider.setup();
+  //timeProvider.logTime();
     
   updateLCD(1);
  
   //Connect to the MQTT Broker:
-  MQTT_Connect();
+  //MQTT_Connect();
 
   // Send the IOT device attributes at MQTT connection
-  IOT_setAttributes();
+  //IOT_setAttributes();
 
   // Setup WebServer so that we can have a web page while connecting to the PZEM004T
   Log.I("Setting up the embedded web server...");
@@ -1290,7 +1459,9 @@ void setup() {
 
 void loop() {
     // Check if we are still connected.
-    check_Connectivity();
+    //check_Connectivity();
+    WIFI_SetupLoop();
+    MQTT_ConnectLoop();
 
     // Power meter state machine
     switch (mState)

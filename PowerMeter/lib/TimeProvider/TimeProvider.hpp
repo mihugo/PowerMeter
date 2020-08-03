@@ -20,6 +20,7 @@ public:
     void setTimeZone( int );
     void logTime();
     void setup ();
+    int utcOffset (time_t);
     //void handle();
 };
 
